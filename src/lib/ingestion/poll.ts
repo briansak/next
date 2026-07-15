@@ -2,7 +2,9 @@ import { prisma } from "@/lib/db";
 import {
   importFromAppleCalendar,
   importFromAppleMail,
+  syncEmailMessages,
 } from "@/lib/integrations/email/ingest";
+import { backfillInternalCallReplays } from "@/lib/integrations/internal-calls/replay-ingest";
 import { appleCalendarImportEnabled } from "@/lib/integrations/email/apple-calendar";
 import { correlateGongEmailsForTenant, gongEmailCorrelationEnabled } from "@/lib/integrations/gong/correlate";
 import { appleMailImportEnabled } from "@/lib/integrations/email/apple-mail";
@@ -32,6 +34,14 @@ export interface TenantPollResult {
     skipped: number;
     rejected: number;
     candidates: number;
+    error?: string;
+  };
+  internalCalls?: {
+    scanned: number;
+    ingested: number;
+    upgraded: number;
+    skipped: number;
+    personalReplayCandidates?: number;
     error?: string;
   };
 }
@@ -80,6 +90,16 @@ async function hasActiveEmailPolicy(tenantId: string): Promise<boolean> {
   return !!policy;
 }
 
+async function hasMicrosoft365Connection(tenantId: string): Promise<boolean> {
+  const token = await prisma.integrationToken.findUnique({
+    where: {
+      tenantId_provider: { tenantId, provider: "MICROSOFT365" },
+    },
+    select: { id: true },
+  });
+  return !!token;
+}
+
 export async function pollTenantIngestion(
   tenantId: string
 ): Promise<TenantPollResult> {
@@ -123,6 +143,32 @@ export async function pollTenantIngestion(
 
     if (gongEmailCorrelationEnabled()) {
       result.gong = await correlateGongEmailsForTenant(tenantId);
+    }
+
+    try {
+      if (await hasMicrosoft365Connection(tenantId)) {
+        const email = await syncEmailMessages(tenantId);
+        result.internalCalls = {
+          scanned: email.internalCallsBackfill?.scanned ?? 0,
+          ingested:
+            (email.internalCallsBackfill?.ingested ?? 0) +
+            (email.ingested ?? 0),
+          upgraded: email.internalCallsBackfill?.upgraded ?? 0,
+          skipped: email.internalCallsBackfill?.skipped ?? 0,
+          personalReplayCandidates: email.personalReplayCandidates,
+          error: email.error,
+        };
+      } else {
+        result.internalCalls = await backfillInternalCallReplays(tenantId);
+      }
+    } catch (err) {
+      result.internalCalls = {
+        scanned: 0,
+        ingested: 0,
+        upgraded: 0,
+        skipped: 0,
+        error: err instanceof Error ? err.message : "Internal calls sync failed",
+      };
     }
   }
 

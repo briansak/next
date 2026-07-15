@@ -1,46 +1,61 @@
 import { describe, it, expect } from "vitest";
-import { matchesEmailAllowlist } from "./allowlist";
+import {
+  matchesEmailAllowlist,
+  scoreEmailPartnerPriority,
+} from "./allowlist";
 
-describe("matchesEmailAllowlist", () => {
+describe("scoreEmailPartnerPriority", () => {
   const rules = [
     { fromAddress: "partner@wwt.com", fromDomain: null, subjectPrefix: null },
     { fromAddress: null, fromDomain: "wwt.com", subjectPrefix: null },
     { fromAddress: null, fromDomain: null, subjectPrefix: "[WWT]" },
   ];
 
-  it("rejects when no rules configured", () => {
+  it("returns no boost when no rules configured", () => {
     expect(
-      matchesEmailAllowlist(
+      scoreEmailPartnerPriority(
         { fromAddress: "anyone@example.com", subject: "Hello" },
         []
       )
-    ).toBe(false);
+    ).toEqual({ matched: false, scoreBoost: 0, reasons: [], tags: [] });
   });
 
-  it("matches WWT sender domain", () => {
+  it("boosts WWT sender domain", () => {
+    const result = scoreEmailPartnerPriority(
+      { fromAddress: "contact@wwt.com", subject: "Project update" },
+      rules
+    );
+    expect(result.matched).toBe(true);
+    expect(result.scoreBoost).toBeGreaterThanOrEqual(2);
+    expect(result.tags).toContain("partner-coverage");
+  });
+
+  it("boosts subject prefix", () => {
+    const result = scoreEmailPartnerPriority(
+      { fromAddress: "unknown@other.com", subject: "[WWT] Weekly sync" },
+      rules
+    );
+    expect(result.matched).toBe(true);
+    expect(result.scoreBoost).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not boost unrelated personal email", () => {
+    expect(
+      scoreEmailPartnerPriority(
+        { fromAddress: "me@gmail.com", subject: "Personal note" },
+        rules
+      ).matched
+    ).toBe(false);
+  });
+});
+
+describe("matchesEmailAllowlist", () => {
+  it("reflects partner priority match", () => {
     expect(
       matchesEmailAllowlist(
         { fromAddress: "contact@wwt.com", subject: "Project update" },
-        rules
+        [{ fromDomain: "wwt.com", fromAddress: null, subjectPrefix: null }]
       )
     ).toBe(true);
-  });
-
-  it("matches subject prefix", () => {
-    expect(
-      matchesEmailAllowlist(
-        { fromAddress: "unknown@other.com", subject: "[WWT] Weekly sync" },
-        rules
-      )
-    ).toBe(true);
-  });
-
-  it("rejects non-matching personal email", () => {
-    expect(
-      matchesEmailAllowlist(
-        { fromAddress: "me@gmail.com", subject: "Personal note" },
-        rules
-      )
-    ).toBe(false);
   });
 });

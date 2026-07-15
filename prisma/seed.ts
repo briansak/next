@@ -68,7 +68,7 @@ async function main() {
       name: "WWT partner email",
       status: "DRAFT",
       description:
-        "Ingest email from @wwt.com senders via the shared Microsoft 365 mailbox. Activate after connecting M365.",
+        "Ingest correspondence from connected mailboxes. Partner rules below boost priority for coverage-related messages.",
       emailAllowlists: {
         create: [
           { fromDomain: "wwt.com" },

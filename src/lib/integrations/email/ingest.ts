@@ -1,10 +1,11 @@
 import { prisma } from "@/lib/db";
-import { analyzeCommunication } from "@/lib/heuristics";
+import { analyzeCommunication, scoreToPriority } from "@/lib/heuristics";
 import { analyzeCalendarEvent } from "@/lib/heuristics/calendar-planning";
 import { tryCorrelateGongEmail } from "@/lib/integrations/gong/correlate";
+import { tryIngestReplayEmail, backfillInternalCallReplays, type BackfillInternalCallsResult } from "@/lib/integrations/internal-calls/replay-ingest";
+import { INTERNAL_CALL_LOOKBACK_DAYS } from "@/lib/integrations/gong/internal-calls";
 import {
-  matchesCalendarAllowlist,
-  matchesEmailAllowlist,
+  scoreCalendarPartnerPriority,
   type EmailAllowlistRule,
   type EmailMessage,
 } from "@/lib/integrations/email/allowlist";
@@ -32,7 +33,8 @@ import {
   type CalendarEvent,
 } from "@/lib/integrations/email/ics";
 import {
-  fetchAllowlistedEmails,
+  fetchMailboxEmails,
+  fetchPersonalMailboxReplayEmails,
   getMicrosoft365Config,
   probeMicrosoft365Mailbox,
   refreshMicrosoft365Token,
@@ -104,6 +106,18 @@ export async function getActiveEmailAllowlist(
   }));
 }
 
+export async function isEmailIngestionActive(tenantId: string): Promise<boolean> {
+  const policy = await prisma.ingestionPolicy.findFirst({
+    where: {
+      tenantId,
+      source: "EMAIL",
+      status: "ACTIVE",
+    },
+    select: { id: true },
+  });
+  return !!policy;
+}
+
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -135,14 +149,33 @@ export async function ingestEmailMessage(
   });
   if (gongResult.handled) {
     return {
-      created: gongResult.correlated,
+      created: Boolean(gongResult.correlated || gongResult.internalCall),
       id: gongResult.meetingId ?? message.messageId,
       gong: true,
     };
   }
 
+  const replayResult = await tryIngestReplayEmail(tenantId, {
+    messageId: message.messageId,
+    subject: message.subject,
+    body: message.body,
+    fromAddress: message.fromAddress,
+    fromName: message.fromName,
+    receivedAt: message.receivedAt,
+    threadId: message.threadId,
+    toAddresses: message.toAddresses ?? [],
+    ccAddresses: message.ccAddresses ?? [],
+  });
+  if (replayResult.handled) {
+    return {
+      created: replayResult.created,
+      id: replayResult.id ?? message.messageId,
+    };
+  }
+
   const body = plainBody(message);
   const teamMembers = await getTenantMembers(tenantId);
+  const partnerAllowlistRules = await getActiveEmailAllowlist(tenantId);
 
   const analysis = analyzeCommunication({
     body,
@@ -157,6 +190,7 @@ export async function ingestEmailMessage(
     precedence: message.precedence,
     listUnsubscribe: message.listUnsubscribe,
     autoSubmitted: message.autoSubmitted,
+    partnerAllowlistRules,
   });
 
   const existing = await prisma.communication.findUnique({
@@ -278,6 +312,13 @@ export interface EmailSyncResult {
   mailbox?: string;
   connectedAs?: string;
   error?: string;
+  personalReplayCandidates?: number;
+  internalCallsBackfill?: {
+    scanned: number;
+    ingested: number;
+    upgraded: number;
+    skipped: number;
+  };
 }
 
 export async function syncEmailMessages(
@@ -312,8 +353,7 @@ export async function syncEmailMessages(
   const connectedAs =
     (tokenRecord?.metadata as { connectedAs?: string } | null)?.connectedAs;
 
-  const allowlist = await getActiveEmailAllowlist(tenantId);
-  if (allowlist.length === 0) {
+  if (!(await isEmailIngestionActive(tenantId))) {
     return {
       fetched: 0,
       ingested: 0,
@@ -321,20 +361,23 @@ export async function syncEmailMessages(
       mailbox: sharedMailbox,
       connectedAs,
       error:
-        "Email ingestion policy is not active or has no allowlist rules. Activate the WWT partner email policy after connecting.",
+        "Email ingestion policy is not active. Activate the email policy after connecting.",
     };
   }
 
   const since = new Date();
   since.setDate(since.getDate() - EMAIL_LOOKBACK_DAYS);
 
+  const internalSince = new Date();
+  internalSince.setDate(internalSince.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
+
   let messages: EmailMessage[];
+  let personalReplayMessages: EmailMessage[] = [];
   try {
-    messages = await fetchAllowlistedEmails(
+    messages = await fetchMailboxEmails(accessToken, sharedMailbox, since);
+    personalReplayMessages = await fetchPersonalMailboxReplayEmails(
       accessToken,
-      sharedMailbox,
-      allowlist,
-      since
+      internalSince
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Graph API failed";
@@ -356,7 +399,14 @@ export async function syncEmailMessages(
   let ingested = 0;
   let skipped = 0;
 
-  for (const message of messages) {
+  const seenIds = new Set<string>();
+  const allMessages = [...messages, ...personalReplayMessages].filter((message) => {
+    if (seenIds.has(message.messageId)) return false;
+    seenIds.add(message.messageId);
+    return true;
+  });
+
+  for (const message of allMessages) {
     try {
       const result = await ingestEmailMessage(
         tenantId,
@@ -371,12 +421,16 @@ export async function syncEmailMessages(
     }
   }
 
+  const backfill = await backfillInternalCallReplays(tenantId);
+
   return {
-    fetched: messages.length,
+    fetched: allMessages.length,
     ingested,
     skipped,
     mailbox: sharedMailbox,
     connectedAs,
+    personalReplayCandidates: personalReplayMessages.length,
+    internalCallsBackfill: backfill,
   };
 }
 
@@ -441,6 +495,7 @@ export interface EmlImportResult {
   skipped: number;
   rejected: number;
   errors: string[];
+  internalCallsBackfill?: BackfillInternalCallsResult;
 }
 
 /** Import .eml files saved from Outlook — no Azure app registration required. */
@@ -448,14 +503,13 @@ export async function importEmlFiles(
   tenantId: string,
   files: Array<{ name: string; content: string }>
 ): Promise<EmlImportResult> {
-  const allowlist = await getActiveEmailAllowlist(tenantId);
-  if (allowlist.length === 0) {
+  if (!(await isEmailIngestionActive(tenantId))) {
     return {
       imported: 0,
       skipped: 0,
       rejected: files.length,
       errors: [
-        "Email ingestion policy is not active. Activate the WWT partner email policy first.",
+        "Email ingestion policy is not active. Activate the email policy first.",
       ],
     };
   }
@@ -494,11 +548,10 @@ export async function importEmlFiles(
       continue;
     }
 
-    if (!matchesEmailAllowlist(message, allowlist)) {
-      rejected++;
-      errors.push(
-        `${file.name}: sender ${message.fromAddress} / subject "${message.subject}" did not match allowlist`
-      );
+    const replayResult = await tryIngestReplayEmail(tenantId, message);
+    if (replayResult.handled) {
+      if (replayResult.created || replayResult.upgraded) imported++;
+      else skipped++;
       continue;
     }
 
@@ -519,7 +572,9 @@ export async function importEmlFiles(
     }
   }
 
-  return { imported, skipped, rejected, errors };
+  const backfill = await backfillInternalCallReplays(tenantId);
+
+  return { imported, skipped, rejected, errors, internalCallsBackfill: backfill };
 }
 
 function buildCalendarBody(event: CalendarEvent): string {
@@ -573,6 +628,20 @@ export async function ingestCalendarEvent(
     isAllDay: event.isAllDay,
     partnerDomains,
   });
+
+  const partnerMatch = scoreCalendarPartnerPriority(
+    { summary: event.summary, organizerEmail: event.organizerEmail },
+    allowlist
+  );
+  if (partnerMatch.matched) {
+    analysis.priorityScore = Math.min(
+      10,
+      analysis.priorityScore + partnerMatch.scoreBoost
+    );
+    analysis.priority = scoreToPriority(analysis.priorityScore);
+    analysis.priorityReasons.push(...partnerMatch.reasons);
+    analysis.tags.push(...partnerMatch.tags);
+  }
 
   const externalId = calendarEventId(event.uid, event.start);
 
@@ -668,14 +737,13 @@ export async function importOutlookArchive(
   filename: string,
   data: Buffer
 ): Promise<OutlookArchiveImportResult> {
-  const allowlist = await getActiveEmailAllowlist(tenantId);
-  if (allowlist.length === 0) {
+  if (!(await isEmailIngestionActive(tenantId))) {
     return {
       emails: { imported: 0, skipped: 0, rejected: 0 },
       calendar: { imported: 0, skipped: 0, rejected: 0 },
       warnings: [],
       errors: [
-        "Email ingestion policy is not active. Activate the WWT partner email policy first.",
+        "Email ingestion policy is not active. Activate the email policy first.",
       ],
     };
   }
@@ -712,14 +780,6 @@ export async function importOutlookArchive(
 
   for (const icsFile of parseIcsFiles(extracted.icsFiles)) {
     for (const event of icsFile.events) {
-      if (!matchesCalendarAllowlist(event, allowlist)) {
-        calendarResult.rejected++;
-        errors.push(
-          `${icsFile.name}: "${event.summary}" did not match allowlist`
-        );
-        continue;
-      }
-
       try {
         const result = await ingestCalendarEvent(
           tenantId,
@@ -759,6 +819,7 @@ export interface AppleMailImportResult {
   root: string;
   warnings: string[];
   errors: string[];
+  internalCallsBackfill?: BackfillInternalCallsResult;
 }
 
 /** Read local Apple Mail cache (~/Library/Mail) and import allowlisted messages. */
@@ -780,8 +841,7 @@ export async function importFromAppleMail(
     };
   }
 
-  const allowlist = await getActiveEmailAllowlist(tenantId);
-  if (allowlist.length === 0) {
+  if (!(await isEmailIngestionActive(tenantId))) {
     return {
       scanned: 0,
       candidates: 0,
@@ -791,7 +851,7 @@ export async function importFromAppleMail(
       root: "",
       warnings: [],
       errors: [
-        "Email ingestion policy is not active. Activate the WWT partner email policy first.",
+        "Email ingestion policy is not active. Activate the email policy first.",
       ],
     };
   }
@@ -799,7 +859,7 @@ export async function importFromAppleMail(
   let scan;
   try {
     scan = await scanAppleMailMessages({
-      lookbackDays: EMAIL_LOOKBACK_DAYS,
+      lookbackDays: Math.max(EMAIL_LOOKBACK_DAYS, INTERNAL_CALL_LOOKBACK_DAYS),
     });
   } catch (err) {
     return {
@@ -841,8 +901,10 @@ export async function importFromAppleMail(
       continue;
     }
 
-    if (!matchesEmailAllowlist(message, allowlist)) {
-      rejected++;
+    const replayResult = await tryIngestReplayEmail(tenantId, message);
+    if (replayResult.handled) {
+      if (replayResult.created || replayResult.upgraded) imported++;
+      else skipped++;
       continue;
     }
 
@@ -863,6 +925,8 @@ export async function importFromAppleMail(
     }
   }
 
+  const backfill = await backfillInternalCallReplays(tenantId);
+
   return {
     scanned: scan.filesScanned,
     candidates: scan.messages.length,
@@ -872,6 +936,7 @@ export async function importFromAppleMail(
     root: scan.root,
     warnings: scan.warnings,
     errors: errors.slice(0, 20),
+    internalCallsBackfill: backfill,
   };
 }
 
@@ -903,8 +968,7 @@ export async function importFromAppleCalendar(
     };
   }
 
-  const allowlist = await getActiveEmailAllowlist(tenantId);
-  if (allowlist.length === 0) {
+  if (!(await isEmailIngestionActive(tenantId))) {
     return {
       calendars: [],
       candidates: 0,
@@ -913,7 +977,7 @@ export async function importFromAppleCalendar(
       rejected: 0,
       warnings: [],
       errors: [
-        "Email ingestion policy is not active. Activate the WWT partner email policy first.",
+        "Email ingestion policy is not active. Activate the email policy first.",
       ],
     };
   }
@@ -945,10 +1009,6 @@ export async function importFromAppleCalendar(
 
   for (const raw of scan.events) {
     const event = rawEventToCalendarEvent(raw);
-    if (!matchesCalendarAllowlist(event, allowlist)) {
-      rejected++;
-      continue;
-    }
 
     try {
       const result = await ingestCalendarEvent(

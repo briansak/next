@@ -24,11 +24,17 @@ import {
   PriorityBadge,
 } from "@/components/dashboard-ui";
 import { EventPlanningTodos } from "@/components/event-planning-todos";
+import { NextStepsPanel, type NextStepCardItem } from "@/components/next-steps-panel";
 import { suggestEventPrepTodos } from "@/lib/heuristics/event-prep-suggestions";
+import {
+  applyUserNextStepOrder,
+  formatNextStepHeadline,
+  formatNextStepMeta,
+} from "@/lib/heuristics/next-step-display";
 import { applyViewerPriorityOverride } from "@/lib/communications/viewer-override";
 import { isPrioritiesCommunication } from "@/lib/communications/space-purpose";
+import { isInternalCallCommunication } from "@/lib/communications/internal-call";
 import { scopedToTenant } from "@/lib/tenant";
-import Link from "next/link";
 
 interface CommunicationMetadata {
   mentionedUserIds?: string[];
@@ -123,6 +129,25 @@ export default async function DashboardPage() {
   const tenantWhere = scopedToTenant(session.tenantId);
   const userEmail = session.email.toLowerCase();
 
+  let savedNextStepOrder: string[] = [];
+  try {
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        tenantId_userId: {
+          tenantId: session.tenantId,
+          userId: session.userId,
+        },
+      },
+      select: { nextStepOrder: true },
+    });
+
+    savedNextStepOrder = Array.isArray(membership?.nextStepOrder)
+      ? membership.nextStepOrder.filter((id): id is string => typeof id === "string")
+      : [];
+  } catch {
+    savedNextStepOrder = [];
+  }
+
   const rawCommunications = await prisma.communication
     .findMany({
       where: { ...tenantWhere, source: { in: ["WEBEX", "EMAIL", "OUTLOOK_CALENDAR"] } },
@@ -138,7 +163,11 @@ export default async function DashboardPage() {
     .catch(() => []);
 
   const communications = rawCommunications
-    .filter((c) => isPrioritiesCommunication(c.source, c.metadata))
+    .filter(
+      (c) =>
+        isPrioritiesCommunication(c.source, c.metadata) &&
+        !isInternalCallCommunication(c.source, c.subject, c.tags, c.metadata)
+    )
     .map((c) => {
       const metadata = (c.metadata ?? {}) as CommunicationMetadata;
       const boosted = applyViewerMentionBoost(
@@ -235,6 +264,15 @@ export default async function DashboardPage() {
   const meetings = rawMeetings
     .filter((m) =>
       meetingVisibleToUser((m.metadata ?? {}) as MeetingMetadata, userEmail, isAdmin)
+    )
+    .filter(
+      (m) =>
+        !isInternalCallCommunication(
+          m.source,
+          m.subject,
+          m.tags,
+          m.metadata
+        )
     )
     .map((m) => {
       const meta = (m.metadata ?? {}) as MeetingMetadata;
@@ -338,7 +376,13 @@ export default async function DashboardPage() {
       },
       include: {
         communication: {
-          select: { receivedAt: true, source: true, subject: true },
+          select: {
+            receivedAt: true,
+            source: true,
+            subject: true,
+            authorName: true,
+            excerpt: true,
+          },
         },
       },
       orderBy: [{ priority: "desc" }, { dueAt: "asc" }],
@@ -346,12 +390,32 @@ export default async function DashboardPage() {
     })
     .catch(() => [])
     .then((steps) =>
-      steps.sort((a, b) => {
-        const aDate = a.communication?.receivedAt?.getTime() ?? 0;
-        const bDate = b.communication?.receivedAt?.getTime() ?? 0;
-        return bDate - aDate;
-      })
+      applyUserNextStepOrder(
+        steps.sort((a, b) => {
+          const aDate = a.communication?.receivedAt?.getTime() ?? 0;
+          const bDate = b.communication?.receivedAt?.getTime() ?? 0;
+          return bDate - aDate;
+        }),
+        savedNextStepOrder
+      )
     );
+
+  const nextStepCards: NextStepCardItem[] = nextSteps.map((step) => ({
+    id: step.id,
+    headline: formatNextStepHeadline({
+      title: step.title,
+      status: step.status,
+      dueAt: step.dueAt,
+      communication: step.communication,
+    }),
+    meta: formatNextStepMeta({
+      title: step.title,
+      status: step.status,
+      dueAt: step.dueAt,
+      communication: step.communication,
+    }),
+    communicationId: step.communicationId,
+  }));
 
   return (
     <main style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem 1.5rem" }}>
@@ -451,6 +515,7 @@ export default async function DashboardPage() {
                         <CardAiSummary
                           text={summaryMap.get(event.id)?.text ?? event.summary}
                           label={summaryMap.get(event.id)?.label}
+                          source={summaryMap.get(event.id)?.source}
                         />
                         {(meta.location || attendeePreview) && (
                           <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
@@ -531,6 +596,7 @@ export default async function DashboardPage() {
                       <CardAiSummary
                         text={summaryMap.get(c.id)?.text}
                         label={summaryMap.get(c.id)?.label}
+                        source={summaryMap.get(c.id)?.source}
                       />
                       {!summaryMap.get(c.id)?.text && (
                         <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
@@ -552,68 +618,11 @@ export default async function DashboardPage() {
             alignSelf: "start",
           }}
         >
-          <Panel title="Your next steps" count={nextSteps.length}>
-            {nextSteps.length === 0 ? (
+          <Panel title="Your next steps" count={nextStepCards.length}>
+            {nextStepCards.length === 0 ? (
               <EmptyState message="No open next steps assigned to you." />
             ) : (
-              <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                {nextSteps.map((s) => {
-                  const stepContent = (
-                    <>
-                      <p style={{ fontWeight: 500, fontSize: "0.875rem" }}>{s.title}</p>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                        {s.status}
-                        {s.communication?.subject
-                          ? ` · ${s.communication.subject}`
-                          : null}
-                        {s.communication?.receivedAt &&
-                          ` · ${s.communication.source === "OUTLOOK_CALENDAR" && s.communication.receivedAt > new Date()
-                            ? formatFutureDate(s.communication.receivedAt)
-                            : formatRelativeAge(s.communication.receivedAt)}`}
-                      </span>
-                    </>
-                  );
-
-                  return (
-                    <li
-                      key={s.id}
-                      style={{
-                        padding: "0.75rem",
-                        background: "var(--bg)",
-                        borderRadius: 8,
-                        border: "1px solid var(--border)",
-                      }}
-                    >
-                      {s.communicationId ? (
-                        <Link
-                          href={`/dashboard/${s.communicationId}`}
-                          className="dashboard-card-link"
-                          style={{
-                            display: "block",
-                            textDecoration: "none",
-                            color: "inherit",
-                          }}
-                        >
-                          {stepContent}
-                          <span
-                            style={{
-                              display: "inline-block",
-                              marginTop: "0.35rem",
-                              fontSize: "0.72rem",
-                              color: "var(--accent)",
-                              fontWeight: 500,
-                            }}
-                          >
-                            View source →
-                          </span>
-                        </Link>
-                      ) : (
-                        stepContent
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+              <NextStepsPanel steps={nextStepCards} />
             )}
           </Panel>
         </aside>
@@ -634,8 +643,15 @@ export default async function DashboardPage() {
               {meetings.map((m) => {
                 const meta = (m.metadata ?? {}) as MeetingMetadata;
                 const cardSummary = summaryMap.get(m.id);
-                const summary = cardSummary?.text ?? null;
-                const summaryLabel = cardSummary?.label ?? null;
+                const summary =
+                  cardSummary?.text?.trim() ||
+                  meta.gongSummaryText?.trim() ||
+                  null;
+                const summaryLabel = summary
+                  ? cardSummary?.label ?? (meta.gongSummaryText?.trim() ? "Gong AI" : null)
+                  : null;
+                const summarySource =
+                  cardSummary?.source ?? (meta.gongSummaryText?.trim() ? "gong" : null);
                 const transcriptLabel = transcriptSourceLabel(meta.transcriptSource);
                 const attributed =
                   meta.relevantUserEmails?.[0] ?? meta.connectedAccountEmails?.[0];
@@ -699,6 +715,7 @@ export default async function DashboardPage() {
                               : m.excerpt ?? "No summary available for this meeting.")
                         }
                         label={summary ? summaryLabel : null}
+                        source={summarySource}
                       />
                     </DashboardCardLink>
                   </li>

@@ -30,6 +30,9 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
             <Link href="/technologies" style={{ fontSize: "0.875rem" }}>
               Technologies
             </Link>
+            <Link href="/internal-calls" style={{ fontSize: "0.875rem" }}>
+              Internal Calls
+            </Link>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "1rem", fontSize: "0.875rem" }}>

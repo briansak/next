@@ -69,11 +69,13 @@ enum MemberRole {
 }
 
 model TenantMember {
-  id        String     @id @default(cuid())
-  tenantId  String
-  userId    String
-  role      MemberRole @default(MEMBER)
-  createdAt DateTime   @default(now())
+  id             String     @id @default(cuid())
+  tenantId       String
+  userId         String
+  role           MemberRole @default(MEMBER)
+  /// Per-user ordering for the dashboard "Your next steps" panel.
+  nextStepOrder  Json?
+  createdAt      DateTime   @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)

@@ -49,6 +49,22 @@ describe("pickExistingDashboardSummary", () => {
     expect(summary?.source).toBe("gong");
     expect(summary?.text).toContain("Q3 pipeline");
   });
+
+  it("prefers Gong summaries over cached dashboard summaries", () => {
+    const summary = pickExistingDashboardSummary(
+      item({
+        source: "WEBEX_MEETING",
+        metadata: {
+          gongSummaryText: "Discussed Q3 pipeline and partner expansion.",
+          dashboardSummaryText: "Generic cached meeting recap.",
+          dashboardSummarySource: "ollama",
+        },
+      })
+    );
+
+    expect(summary?.source).toBe("gong");
+    expect(summary?.text).toContain("Q3 pipeline");
+  });
 });
 
 describe("buildHeuristicDashboardSummary", () => {

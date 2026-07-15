@@ -65,17 +65,19 @@ MICROSOFT_LOGIN_HINT="service-account@yourcompany.com"
 2. Sign in as tenant admin (`admin@example.com` in seed)
 3. **Settings → Ingestion → Connect Microsoft 365** (complete Duo when prompted)
 4. **Test mailbox access** — verifies Graph can read the shared mailbox
-5. **Activate email policy** — enables allowlist rules (seed: `@wwt.com`, `[WWT]` subject)
-6. **Sync email now** — ingests matching messages from the last 14 days
+5. **Activate email policy** — enables ingestion (partner rules boost priority; seed: `@wwt.com`, `[WWT]` subject)
+6. **Sync email now** — ingests messages from the last 14 days (shared mailbox + personal inbox replays)
 7. Check **Dashboard → Actionable communications** for `EMAIL` items
 
-## Allowlist Rules
+## Partner priority rules
 
-Email is ingested only when it matches **at least one** active policy rule:
+Partner coverage rules **boost priority** on My Priorities — they do **not** filter what gets ingested:
 
-- `fromDomain` — sender domain (e.g. `wwt.com`)
-- `fromAddress` — exact sender address
-- `subjectPrefix` — subject starts with (e.g. `[WWT]`)
+- `fromDomain` — sender domain (e.g. `wwt.com`) → +2 priority
+- `fromAddress` — exact partner contact → +3 priority
+- `subjectPrefix` — partner thread prefix (e.g. `[WWT]`) → +2 priority
+
+Internal call replays and other correspondence are still ingested; many appear on **Internal Calls** rather than My Priorities.
 
 Policy starts as **DRAFT** in seed data; activate it after a successful mailbox test.
 
@@ -88,7 +90,7 @@ Policy starts as **DRAFT** in seed data; activate it after a successful mailbox 
 | Duo loop or blocked login | Conditional Access | Use compliant device/VPN; contact Cisco IT |
 | Graph **403** on test/sync | No shared mailbox access | Grant Full Access to connecting account |
 | Graph **404** on mailbox | Wrong `MICROSOFT_SHARED_MAILBOX` UPN | Verify address in Exchange admin |
-| Sync returns 0 messages | Policy DRAFT or no allowlist match | Activate policy; confirm sender matches rules |
+| Sync returns 0 messages | Policy DRAFT or mailbox empty | Activate policy; run sync; check lookback window |
 | Token refresh fails later | CA revoked refresh token | **Reconnect Microsoft 365** (Duo again) |
 
 | Token refresh fails later | CA revoked refresh token | **Reconnect Microsoft 365** (Duo again) |

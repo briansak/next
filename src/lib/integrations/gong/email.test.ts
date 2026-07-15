@@ -52,6 +52,18 @@ Action items:
     expect(parsed?.meetingTitle).toContain("Partner strategy");
     expect(parsed?.summary).toContain("Q3 pipeline");
     expect(parsed?.actionItems.length).toBeGreaterThanOrEqual(1);
+    expect(parsed?.replayUrl).toBeNull();
+  });
+});
+
+describe("extractGongReplayUrl", () => {
+  it("extracts gong call replay links", async () => {
+    const { extractGongReplayUrl } = await import("./email");
+    expect(
+      extractGongReplayUrl(
+        "View call: https://app.gong.io/call?id=abc123&utm=1"
+      )
+    ).toBe("https://app.gong.io/call?id=abc123&utm=1");
   });
 });
 

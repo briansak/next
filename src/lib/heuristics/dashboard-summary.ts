@@ -202,6 +202,12 @@ export function pickExistingDashboardSummary(
   item: DashboardSummaryItem
 ): DashboardSummary | null {
   const meta = (item.metadata ?? {}) as SummaryMetadata;
+
+  if (item.source === "WEBEX_MEETING") {
+    const meeting = meetingSummaryFromMetadata(meta);
+    if (meeting?.source === "gong") return meeting;
+  }
+
   const cached = cachedDashboardSummary(meta);
   if (cached) return cached;
 

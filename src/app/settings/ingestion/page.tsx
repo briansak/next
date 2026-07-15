@@ -57,8 +57,8 @@ export default async function IngestionSettingsPage({
       <header style={{ marginBottom: "2rem" }}>
         <h1 style={{ fontSize: "1.5rem", fontWeight: 600 }}>Ingestion settings</h1>
         <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", marginTop: "0.25rem" }}>
-          {session.partnerName ?? session.tenantName} — only explicitly allowlisted sources
-          are synced. Personal inboxes are never ingested.
+          {session.partnerName ?? session.tenantName} — syncs correspondence from connected
+          mailboxes. Partner rules boost priority; they do not block ingestion.
         </p>
       </header>
 
@@ -97,8 +97,9 @@ export default async function IngestionSettingsPage({
         <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", marginBottom: "1rem", lineHeight: 1.5 }}>
           Import partner email and calendar via Apple Mail/Calendar, file upload, or archive.
           Supports <code>.zip</code>, <code>.pst</code>, <code>.mbox</code>, <code>.ics</code>,
-          and <code>.eml</code>. Allowlist rules still apply. New items are scored for @mentions,
-          explicit asks, and deadlines automatically.
+          and <code>.eml</code>. All correspondence in the lookback window is imported; partner
+          rules boost priority on My Priorities. New items are scored for @mentions, explicit
+          asks, and deadlines automatically.
         </p>
         <p style={{ color: "var(--text-muted)", fontSize: "0.75rem", marginBottom: "1rem", lineHeight: 1.5 }}>
           <strong>Auto-poll:</strong> set <code>ENABLE_INGESTION_POLL=true</code> to re-scan Webex,

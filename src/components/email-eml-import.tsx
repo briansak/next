@@ -261,8 +261,8 @@ export function EmailEmlImport({
               margin: 0,
             }}
           >
-            Activate the email policy first. Imports still respect allowlist rules
-            (@wwt.com, [WWT]).
+            Activate the email policy first. Partner rules (@wwt.com, [WWT]) boost priority
+            on My Priorities but do not block imports.
           </p>
         )}
       </form>

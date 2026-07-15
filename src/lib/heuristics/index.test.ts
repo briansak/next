@@ -77,4 +77,19 @@ describe("analyzeCommunication", () => {
     expect(result.tags).toContain("unanswered");
     expect(result.suggestedAction).toBe("Follow up on unanswered thread");
   });
+
+  it("boosts priority for partner coverage email", () => {
+    const result = analyzeCommunication({
+      body: "Following up on the joint roadmap.",
+      subject: "[WWT] Weekly sync",
+      receivedAt: new Date(),
+      fromAddress: "contact@wwt.com",
+      partnerAllowlistRules: [
+        { fromDomain: "wwt.com", fromAddress: null, subjectPrefix: "[WWT]" },
+      ],
+    });
+
+    expect(result.priorityScore).toBeGreaterThanOrEqual(2);
+    expect(result.tags).toContain("partner-coverage");
+  });
 });

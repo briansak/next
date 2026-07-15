@@ -6,6 +6,10 @@ import {
   titleSimilarity,
   type GongEmailContent,
 } from "@/lib/integrations/gong/email";
+import {
+  classifyInternalCall,
+  type InternalCallClassification,
+} from "@/lib/integrations/gong/internal-calls";
 import type { ParsedEml } from "@/lib/integrations/email/eml";
 import { MEETING_LOOKBACK_DAYS } from "@/lib/integrations/webex/meetings";
 
@@ -15,6 +19,7 @@ const GONG_MATCH_WINDOW_DAYS = 21;
 export interface GongCorrelationResult {
   handled: boolean;
   correlated: boolean;
+  internalCall?: boolean;
   meetingId?: string;
   meetingTitle?: string;
   reason?: string;
@@ -28,6 +33,10 @@ interface MeetingMetadata {
   gongActionItems?: string[];
   gongEmailMessageIds?: string[];
   gongReceivedAt?: string;
+  gongReplayUrl?: string;
+  gongMeetingTitle?: string;
+  internalCallType?: string;
+  internalCallLabel?: string;
   summaryActionItems?: string[];
   actionItems?: Array<{
     title: string;
@@ -54,22 +63,36 @@ export async function tryCorrelateGongEmail(
     return { handled: false, correlated: false };
   }
 
+  const internalCall = classifyInternalCall(gong.meetingTitle, gong.subject);
   const match = await findMatchingMeeting(tenantId, gong);
-  if (!match) {
+
+  if (match) {
+    await attachGongSummaryToMeeting(tenantId, match.id, gong, internalCall);
     return {
       handled: true,
-      correlated: false,
-      meetingTitle: gong.meetingTitle,
-      reason: `No meeting matched "${gong.meetingTitle}"`,
+      correlated: true,
+      internalCall: Boolean(internalCall),
+      meetingId: match.id,
+      meetingTitle: match.subject ?? gong.meetingTitle,
     };
   }
 
-  await attachGongSummaryToMeeting(tenantId, match.id, gong);
+  if (internalCall) {
+    const id = await ingestInternalCallFromGong(tenantId, gong, internalCall);
+    return {
+      handled: true,
+      correlated: false,
+      internalCall: true,
+      meetingId: id,
+      meetingTitle: gong.meetingTitle,
+    };
+  }
+
   return {
     handled: true,
-    correlated: true,
-    meetingId: match.id,
-    meetingTitle: match.subject ?? gong.meetingTitle,
+    correlated: false,
+    meetingTitle: gong.meetingTitle,
+    reason: `No meeting matched "${gong.meetingTitle}"`,
   };
 }
 
@@ -117,7 +140,8 @@ async function findMatchingMeeting(
 async function attachGongSummaryToMeeting(
   tenantId: string,
   communicationId: string,
-  gong: GongEmailContent
+  gong: GongEmailContent,
+  internalCall: InternalCallClassification | null
 ): Promise<void> {
   const existing = await prisma.communication.findUnique({
     where: { id: communicationId },
@@ -152,6 +176,10 @@ async function attachGongSummaryToMeeting(
       : meta.gongActionItems,
     gongEmailMessageIds: [...processedIds, gong.messageId],
     gongReceivedAt: gong.receivedAt.toISOString(),
+    gongReplayUrl: gong.replayUrl ?? meta.gongReplayUrl,
+    gongMeetingTitle: gong.meetingTitle,
+    internalCallType: internalCall?.type ?? meta.internalCallType,
+    internalCallLabel: internalCall?.label ?? meta.internalCallLabel,
     hasSummary: Boolean(primarySummary || hasGongSummary || meta.gongSummaryText),
     summaryText: useGongAsPrimary ? gong.summary : meta.summaryText,
     summarySource: useGongAsPrimary ? "gong" : meta.summarySource,
@@ -162,12 +190,17 @@ async function attachGongSummaryToMeeting(
   const tags = new Set(existing.tags);
   tags.add("meeting");
   tags.add("gong-summary");
+  if (internalCall) tags.add("internal-call");
+  if (internalCall) tags.add(internalCall.type);
   if (gongActionItems.length > 0) tags.add("action-required");
   if (useGongAsPrimary || hasGongSummary) tags.add("ai-summary");
 
   const reasons = [...existing.priorityReasons];
   if (!reasons.some((r) => r.includes("Gong"))) {
     reasons.push("Gong AI summary correlated from email");
+  }
+  if (internalCall && !reasons.some((r) => r.includes(internalCall.label))) {
+    reasons.push(`${internalCall.label} replay available`);
   }
 
   let priorityScore = Math.min(10, existing.priorityScore + 2);
@@ -201,6 +234,63 @@ async function attachGongSummaryToMeeting(
     priority,
     existing.nextSteps.map((s) => s.title)
   );
+}
+
+async function ingestInternalCallFromGong(
+  tenantId: string,
+  gong: GongEmailContent,
+  internalCall: InternalCallClassification
+): Promise<string> {
+  const existing = await prisma.communication.findFirst({
+    where: {
+      tenantId,
+      externalId: gong.messageId,
+      source: "EMAIL",
+    },
+    select: { id: true },
+  });
+  if (existing) return existing.id;
+
+  const hasSummary = gong.summary.length > 0;
+  const communication = await prisma.communication.create({
+    data: {
+      tenantId,
+      source: "EMAIL",
+      externalId: gong.messageId,
+      subject: gong.meetingTitle,
+      body: gong.summary || gong.subject,
+      excerpt: (gong.summary || gong.meetingTitle).slice(0, 220),
+      summary: gong.summary.slice(0, 500),
+      authorEmail: gong.fromAddress,
+      receivedAt: gong.receivedAt,
+      priority: "INFO",
+      priorityScore: 2,
+      priorityReasons: [`${internalCall.label} replay from Gong email`],
+      tags: [
+        "internal-call",
+        internalCall.type,
+        "gong-summary",
+        ...(hasSummary ? ["ai-summary"] : []),
+      ],
+      metadata: {
+        internalCallType: internalCall.type,
+        internalCallLabel: internalCall.label,
+        gongSummaryText: gong.summary,
+        gongActionItems: gong.actionItems,
+        gongReplayUrl: gong.replayUrl,
+        gongMeetingTitle: gong.meetingTitle,
+        gongEmailMessageIds: [gong.messageId],
+        gongReceivedAt: gong.receivedAt.toISOString(),
+        fromGongEmail: true,
+        messageId: gong.messageId,
+      } as Prisma.InputJsonValue,
+    },
+    select: { id: true },
+  });
+
+  await syncGongNextSteps(tenantId, communication.id, gong.actionItems, "INFO", []);
+
+  return communication.id;
 }
 
 function mergeActionItems(

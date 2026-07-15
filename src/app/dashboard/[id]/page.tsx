@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
-import { CardAiSummary } from "@/components/card-ai-summary";
+import { CardAiSummary, GongMeetingSummary } from "@/components/card-ai-summary";
 import {
   formatDateTime,
   formatFutureDate,
@@ -17,6 +17,9 @@ import {
   applyViewerPriorityOverride,
 } from "@/lib/communications/viewer-override";
 import { isTechnologyCommunication } from "@/lib/communications/space-purpose";
+import {
+  isInternalCallCommunication,
+} from "@/lib/communications/internal-call";
 import {
   resolveDashboardSummary,
   type DashboardSummaryItem,
@@ -115,10 +118,23 @@ export default async function CommunicationDetailPage({
   };
 
   const aiSummary = await resolveDashboardSummary(summaryItem);
+  const meetingMeta = meta as MeetingMetadata;
+  const summaryText =
+    aiSummary.text?.trim() ||
+    meetingMeta.gongSummaryText?.trim() ||
+    meetingMeta.summaryText?.trim() ||
+    null;
+  const summarySource =
+    aiSummary.source === "gong" || meetingMeta.gongSummaryText?.trim()
+      ? "gong"
+      : aiSummary.source;
+  const summaryLabel =
+    summarySource === "gong"
+      ? "Gong AI"
+      : aiSummary.label;
   const formattedBody = formatCommunicationBody(communication.body);
   const emailMeta = meta as EmailMetadata;
   const calendarMeta = meta as CalendarMetadata;
-  const meetingMeta = meta as MeetingMetadata;
   const baseOverride = applyViewerPriorityOverride(
     communication.priorityScore,
     communication.priority,
@@ -150,8 +166,22 @@ export default async function CommunicationDetailPage({
     [];
 
   const fromTechnologies = isTechnologyCommunication(communication.metadata);
-  const backHref = fromTechnologies ? "/technologies" : "/dashboard";
-  const backLabel = fromTechnologies ? "Technologies" : "My Priorities";
+  const fromInternalCalls = isInternalCallCommunication(
+    communication.source,
+    communication.subject,
+    communication.tags,
+    communication.metadata
+  );
+  const backHref = fromTechnologies
+    ? "/technologies"
+    : fromInternalCalls
+      ? "/internal-calls"
+      : "/dashboard";
+  const backLabel = fromTechnologies
+    ? "Technologies"
+    : fromInternalCalls
+      ? "Internal Calls"
+      : "My Priorities";
 
   return (
     <main style={{ maxWidth: 760, margin: "0 auto", padding: "2rem 1.5rem" }}>
@@ -247,7 +277,12 @@ export default async function CommunicationDetailPage({
         <h2 style={{ fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.75rem" }}>
           Summary
         </h2>
-        <CardAiSummary text={aiSummary.text} label={aiSummary.label} />
+        <CardAiSummary
+          text={summaryText}
+          label={summaryLabel}
+          source={summarySource}
+          maxBullets={8}
+        />
         {!fromTechnologies && communication.priorityReasons.length > 0 && (
           <ul
             style={{
@@ -289,7 +324,9 @@ export default async function CommunicationDetailPage({
           </section>
         )}
 
-      {communication.source === "WEBEX_MEETING" && meetingActionItems.length > 0 && (
+      {communication.source === "WEBEX_MEETING" &&
+        meetingActionItems.length > 0 &&
+        !meetingMeta.gongSummaryText && (
         <section
           style={{
             background: "var(--surface)",
@@ -360,8 +397,8 @@ export default async function CommunicationDetailPage({
       </section>
 
       {communication.source === "WEBEX_MEETING" &&
-        meetingMeta.summaryText &&
-        meetingMeta.transcriptText && (
+        (meetingMeta.gongSummaryText ||
+          (meetingMeta.summaryText && meetingMeta.transcriptText)) && (
           <section
             style={{
               background: "var(--surface)",
@@ -372,11 +409,18 @@ export default async function CommunicationDetailPage({
             }}
           >
             <h2 style={{ fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.75rem" }}>
-              Meeting summary
+              {meetingMeta.gongSummaryText ? "Gong AI summary" : "Meeting summary"}
             </h2>
-            <p style={{ fontSize: "0.875rem", lineHeight: 1.6, color: "var(--text-muted)" }}>
-              {meetingMeta.gongSummaryText ?? meetingMeta.summaryText}
-            </p>
+            {meetingMeta.gongSummaryText ? (
+              <GongMeetingSummary
+                text={meetingMeta.gongSummaryText}
+                actionItems={meetingMeta.gongActionItems}
+              />
+            ) : (
+              <p style={{ fontSize: "0.875rem", lineHeight: 1.6, color: "var(--text-muted)" }}>
+                {meetingMeta.summaryText}
+              </p>
+            )}
           </section>
         )}
 

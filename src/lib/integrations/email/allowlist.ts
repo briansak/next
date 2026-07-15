@@ -1,5 +1,6 @@
 /**
- * Email allowlist matching — shared across Microsoft 365 and other email sources.
+ * Partner coverage rules — used to boost priority for partner-related correspondence,
+ * not to filter what gets ingested.
  */
 
 export interface EmailMessage {
@@ -24,39 +25,77 @@ export interface EmailAllowlistRule {
   subjectPrefix?: string | null;
 }
 
+export interface PartnerPriorityMatch {
+  matched: boolean;
+  scoreBoost: number;
+  reasons: string[];
+  tags: string[];
+}
+
 /**
- * Returns true only if the message matches at least one allowlist rule.
- * If no rules are configured, nothing is ingested.
+ * Returns true when the message matches a partner coverage rule.
+ * Used for prioritization — not as an ingestion gate.
  */
 export function matchesEmailAllowlist(
   message: Pick<EmailMessage, "fromAddress" | "subject">,
   rules: EmailAllowlistRule[]
 ): boolean {
+  return scoreEmailPartnerPriority(message, rules).matched;
+}
+
+export function scoreEmailPartnerPriority(
+  message: Pick<EmailMessage, "fromAddress" | "subject">,
+  rules: EmailAllowlistRule[]
+): PartnerPriorityMatch {
   if (rules.length === 0) {
-    return false;
+    return { matched: false, scoreBoost: 0, reasons: [], tags: [] };
   }
 
   const fromLower = message.fromAddress.toLowerCase();
   const domain = fromLower.split("@")[1] ?? "";
+  const reasons: string[] = [];
+  let scoreBoost = 0;
 
-  return rules.some((rule) => {
+  for (const rule of rules) {
     if (rule.fromAddress && fromLower === rule.fromAddress.toLowerCase()) {
-      return true;
+      scoreBoost = Math.max(scoreBoost, 3);
+      reasons.push(`From partner contact ${rule.fromAddress}`);
     }
     if (rule.fromDomain && domain === rule.fromDomain.toLowerCase()) {
-      return true;
+      scoreBoost = Math.max(scoreBoost, 2);
+      reasons.push(`From partner domain @${rule.fromDomain}`);
     }
-    if (
-      rule.subjectPrefix &&
-      message.subject.startsWith(rule.subjectPrefix)
-    ) {
-      return true;
+    if (rule.subjectPrefix && message.subject.startsWith(rule.subjectPrefix)) {
+      scoreBoost = Math.max(scoreBoost, 2);
+      reasons.push(`Partner thread prefix "${rule.subjectPrefix}"`);
     }
-    return false;
-  });
+  }
+
+  return {
+    matched: scoreBoost > 0,
+    scoreBoost,
+    reasons: [...new Set(reasons)],
+    tags: scoreBoost > 0 ? ["partner-coverage"] : [],
+  };
 }
 
-/** Calendar events use organizer email + event title against the same allowlist. */
+export function scoreCalendarPartnerPriority(
+  event: {
+    summary: string;
+    organizerEmail?: string;
+  },
+  rules: EmailAllowlistRule[]
+): PartnerPriorityMatch {
+  return scoreEmailPartnerPriority(
+    {
+      fromAddress: event.organizerEmail ?? "",
+      subject: event.summary,
+    },
+    rules
+  );
+}
+
+/** @deprecated Use scoreCalendarPartnerPriority — calendar events are no longer filtered by rules. */
 export function matchesCalendarAllowlist(
   event: {
     summary: string;
@@ -64,21 +103,5 @@ export function matchesCalendarAllowlist(
   },
   rules: EmailAllowlistRule[]
 ): boolean {
-  if (rules.length === 0) return false;
-
-  const organizer = event.organizerEmail?.toLowerCase() ?? "";
-  const domain = organizer.split("@")[1] ?? "";
-
-  return rules.some((rule) => {
-    if (rule.fromAddress && organizer === rule.fromAddress.toLowerCase()) {
-      return true;
-    }
-    if (rule.fromDomain && domain === rule.fromDomain.toLowerCase()) {
-      return true;
-    }
-    if (rule.subjectPrefix && event.summary.startsWith(rule.subjectPrefix)) {
-      return true;
-    }
-    return false;
-  });
+  return scoreCalendarPartnerPriority(event, rules).matched;
 }

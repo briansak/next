@@ -5,6 +5,7 @@ export interface GongEmailContent {
   meetingTitle: string;
   summary: string;
   actionItems: string[];
+  replayUrl: string | null;
   receivedAt: Date;
   fromAddress: string;
   subject: string;
@@ -118,6 +119,7 @@ export function parseGongEmail(parsed: ParsedEml): GongEmailContent | null {
     extractMeetingTitleFromGongSubject(parsed.subject);
   const summary = extractGongSummary(plainBody);
   const actionItems = extractGongActionItems(plainBody);
+  const replayUrl = extractGongReplayUrl(plainBody);
 
   if (!meetingTitle && !summary) return null;
 
@@ -126,10 +128,27 @@ export function parseGongEmail(parsed: ParsedEml): GongEmailContent | null {
     meetingTitle: meetingTitle || parsed.subject,
     summary,
     actionItems,
+    replayUrl,
     receivedAt: parsed.receivedAt,
     fromAddress: parsed.fromAddress,
     subject: parsed.subject,
   };
+}
+
+export function extractGongReplayUrl(body: string): string | null {
+  const urls = body.match(/https?:\/\/[^\s<>"')]+/gi) ?? [];
+
+  for (const raw of urls) {
+    const url = raw.replace(/[),.]+$/, "");
+    if (!/gong\.io/i.test(url)) continue;
+    if (/\/(call|recording|share|meetings)\b/i.test(url)) return url;
+  }
+
+  const fallback = urls
+    .map((raw) => raw.replace(/[),.]+$/, ""))
+    .find((url) => /gong\.io/i.test(url));
+
+  return fallback ?? null;
 }
 
 function stripHtml(html: string): string {
@@ -210,7 +229,6 @@ function extractGongActionItems(body: string): string[] {
 
 function cleanSummaryText(text: string): string {
   return text
-    .replace(/^[-*•]\s+/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+/g, " ")
     .replace(/\n /g, "\n")

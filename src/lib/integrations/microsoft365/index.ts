@@ -8,6 +8,7 @@ import {
   type EmailAllowlistRule,
   type EmailMessage,
 } from "@/lib/integrations/email/allowlist";
+import { isReplayNotificationEmail } from "@/lib/integrations/internal-calls/replay-email";
 
 export type { EmailMessage, EmailAllowlistRule };
 export { matchesEmailAllowlist };
@@ -130,21 +131,17 @@ export async function refreshMicrosoft365Token(
 }
 
 /**
- * Fetch messages from a shared mailbox and filter through the email allowlist.
- * Only messages matching at least one rule are returned.
+ * Fetch messages from a shared mailbox. All messages in the lookback window are
+ * returned — partner allowlist rules are applied later for prioritization only.
  */
-export async function fetchAllowlistedEmails(
+export async function fetchMailboxEmails(
   accessToken: string,
   sharedMailbox: string,
-  rules: EmailAllowlistRule[],
-  since?: Date
+  since?: Date,
+  options?: { top?: number }
 ): Promise<EmailMessage[]> {
-  if (rules.length === 0) {
-    return [];
-  }
-
   const url = new URL(`${GRAPH_BASE}/users/${encodeURIComponent(sharedMailbox)}/messages`);
-  url.searchParams.set("$top", "50");
+  url.searchParams.set("$top", String(options?.top ?? 100));
   url.searchParams.set("$orderby", "receivedDateTime desc");
   url.searchParams.set(
     "$select",
@@ -174,6 +171,67 @@ export async function fetchAllowlistedEmails(
 
   for (const msg of data.value ?? []) {
     const fromAddress = msg.from?.emailAddress?.address ?? "";
+    messages.push({
+      messageId: msg.id,
+      subject: msg.subject ?? "",
+      body: msg.body?.content ?? msg.bodyPreview ?? "",
+      fromAddress,
+      fromName: msg.from?.emailAddress?.name,
+      receivedAt: new Date(msg.receivedDateTime),
+      threadId: msg.conversationId,
+    });
+  }
+
+  return messages;
+}
+
+/** @deprecated Partner rules no longer filter fetch — use fetchMailboxEmails */
+export async function fetchAllowlistedEmails(
+  accessToken: string,
+  sharedMailbox: string,
+  _rules: EmailAllowlistRule[],
+  since?: Date
+): Promise<EmailMessage[]> {
+  return fetchMailboxEmails(accessToken, sharedMailbox, since);
+}
+
+/**
+ * Fetch replay-notification emails from the signed-in user's personal mailbox.
+ * Internal call replays (town halls, Bridge sessions) typically land here, not
+ * the shared partner mailbox.
+ */
+export async function fetchPersonalMailboxReplayEmails(
+  accessToken: string,
+  since?: Date
+): Promise<EmailMessage[]> {
+  const url = new URL(`${GRAPH_BASE}/me/messages`);
+  url.searchParams.set("$top", "100");
+  url.searchParams.set("$orderby", "receivedDateTime desc");
+  url.searchParams.set(
+    "$select",
+    "id,subject,bodyPreview,body,receivedDateTime,conversationId,from"
+  );
+
+  if (since) {
+    url.searchParams.set(
+      "$filter",
+      `receivedDateTime ge ${since.toISOString()}`
+    );
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const data = (await response.json()) as { value: GraphMessage[] };
+  const messages: EmailMessage[] = [];
+
+  for (const msg of data.value ?? []) {
+    const fromAddress = msg.from?.emailAddress?.address ?? "";
     const normalized: EmailMessage = {
       messageId: msg.id,
       subject: msg.subject ?? "",
@@ -184,7 +242,7 @@ export async function fetchAllowlistedEmails(
       threadId: msg.conversationId,
     };
 
-    if (matchesEmailAllowlist(normalized, rules)) {
+    if (isReplayNotificationEmail(normalized.subject, normalized.body)) {
       messages.push(normalized);
     }
   }

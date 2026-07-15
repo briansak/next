@@ -1,4 +1,6 @@
 import type { Priority } from "@prisma/client";
+import type { EmailAllowlistRule } from "../integrations/email/allowlist";
+import { scoreEmailPartnerPriority } from "../integrations/email/allowlist";
 import {
   detectMentions,
   type MentionUser,
@@ -33,6 +35,8 @@ export interface HeuristicInput {
   precedence?: string;
   listUnsubscribe?: string;
   autoSubmitted?: string;
+  /** Partner coverage rules — boost priority when matched, never used to drop messages */
+  partnerAllowlistRules?: EmailAllowlistRule[];
 }
 
 export interface HeuristicResult {
@@ -161,6 +165,18 @@ export function analyzeCommunication(input: HeuristicInput): HeuristicResult {
     tags.push(...audience.tags);
     reasons.push(...audience.reasons);
     score += audience.scoreBoost;
+  }
+
+  if (input.partnerAllowlistRules?.length && input.fromAddress) {
+    const partner = scoreEmailPartnerPriority(
+      { fromAddress: input.fromAddress, subject: input.subject ?? "" },
+      input.partnerAllowlistRules
+    );
+    if (partner.matched) {
+      score += partner.scoreBoost;
+      reasons.push(...partner.reasons);
+      tags.push(...partner.tags);
+    }
   }
 
   score = Math.max(0, Math.min(10, score));
