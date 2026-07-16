@@ -125,5 +125,44 @@ Set `WEBEX_SCOPE_MODE` in `.env` (or explicit `WEBEX_SCOPES`):
 | `compliance` | `spark-compliance:messages_read` `spark-compliance:rooms_read` | **Org-wide** read; user has compliance/admin role |
 | `standard+webhooks` | standard + `spark:webhooks_*` | Push ingestion, user-level webhooks |
 | `compliance+webhooks` | compliance + `spark-compliance:webhooks_*` | Push ingestion, org-wide webhooks |
+| `standard+meetings+vidcast` | meetings + `spark:mcp` `Identity:Organization` `Identity:Config` | Vidcast MCP (AI highlights, transcripts) |
 
 On developer.webex.com → your integration → Scopes: check **only** what you configure in `.env`.
+
+## Vidcast MCP (Internal Calls — future)
+
+Town halls and enablement sessions hosted on **Vidcast** (`app.vidcast.io`) expose AI summaries and short highlight reels (e.g. 2m31s of a 45m recording). Programmatic access is via the **Vidcast MCP server**, not the Meetings REST API.
+
+| Requirement | Who | Notes |
+|-------------|-----|-------|
+| OAuth scopes on integration | You | `spark:mcp`, `Identity:Organization`, `Identity:Config` — use `WEBEX_SCOPE_MODE=standard+meetings+vidcast` |
+| Reconnect Webex after scope change | You | Settings → Ingestion → Reconnect Webex |
+| **Vidcast MCP enabled in Control Hub** | **Org admin** | Without this, MCP returns: *"You don't have access to this MCP server yet. Ask your administrator to enable it for your account or organization."* |
+
+**Public server:** `https://mcp.webexapis.com/mcp/vidcast`  
+**Docs:** [Vidcast MCP Server](https://developer.webex.com/mcp/docs/vidcast-mcp-server)
+
+### Cisco internal gateway (VPN)
+
+The [Internal MCP Marketplace](https://mcp-webex.cisco.com/?mode=card&mcpServerName=webexapis) is a **UI for connecting Cursor** — it does not proxy MCP traffic.
+
+| Server | URL | Tools |
+|--------|-----|-------|
+| **Webex APIs** (internal) | `https://aicoding-mcp-webexapis.cisco.com/mcp/` | Spaces, messages, meetings (24 tools) — **not** Vidcast highlights |
+| **Vidcast** (public) | `https://mcp.webexapis.com/mcp/vidcast` | `vidcast-search-videos`, `vidcast-get-video-highlights`, etc. — requires Control Hub |
+
+The marketplace “Vidcast” button on the Webex APIs card is a **demo playlist**, not a separate Vidcast MCP server. There is no internal `mcp/vidcast` endpoint in the marketplace catalog.
+
+Internal Webex APIs MCP (VPN):
+
+```bash
+WEBEX_MCP_URL=https://aicoding-mcp-webexapis.cisco.com/mcp/ npx tsx scripts/probe-vidcast-mcp.ts
+```
+
+Public Vidcast MCP (Control Hub must enable Vidcast MCP for your org):
+
+```bash
+npx tsx scripts/probe-vidcast-mcp.ts
+```
+
+**Until public Vidcast MCP is enabled**, Internal Calls still work via replay notification emails: summary from the email body + **Watch on Vidcast** button from the share link. No highlight reel ingestion until `mcp.webexapis.com/mcp/vidcast` grants access.

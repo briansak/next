@@ -113,6 +113,20 @@ export const WEBEX_SCOPE_PRESETS = {
     "meeting:transcripts_read",
     "meeting:participants_read",
   ],
+  /** Meetings + Vidcast MCP (AI highlights, transcripts) */
+  "standard+meetings+vidcast": [
+    "spark:messages_read",
+    "spark:rooms_read",
+    "spark:people_read",
+    "meeting:schedules_read",
+    "meeting:summaries_read",
+    "meeting:recordings_read",
+    "meeting:transcripts_read",
+    "meeting:participants_read",
+    "spark:mcp",
+    "Identity:Organization",
+    "Identity:Config",
+  ],
   /** Org-wide compliance: requires compliance officer / admin role */
   compliance: ["spark-compliance:messages_read", "spark-compliance:rooms_read"],
   "standard+webhooks": [

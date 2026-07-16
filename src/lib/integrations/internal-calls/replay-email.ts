@@ -1,5 +1,7 @@
 import type { ParsedEml } from "@/lib/integrations/email/eml";
 import type { EmailMessage } from "@/lib/integrations/email/allowlist";
+import { normalizeEmailBodyText } from "../../integrations/email/body-text";
+import { distillEmailDigest } from "../../heuristics/email-digest-summary";
 import { classifyInternalCall } from "../gong/internal-calls";
 
 type ReplayEmailInput = ParsedEml | EmailMessage;
@@ -28,6 +30,8 @@ const REPLAY_PLATFORM_RULES: Array<{ platform: string; pattern: RegExp }> = [
   { platform: "zoom", pattern: /zoom\.us/i },
   { platform: "stream", pattern: /stream\.microsoft/i },
   { platform: "sharepoint", pattern: /sharepoint\.com/i },
+  { platform: "cisco", pattern: /campaignmgr\.cisco\.com/i },
+  { platform: "vidcast", pattern: /vidcast\.io/i },
   { platform: "youtube", pattern: /youtube\.com|youtu\.be/i },
   { platform: "vimeo", pattern: /vimeo\.com/i },
 ];
@@ -38,7 +42,7 @@ export function isReplayNotificationEmail(subject: string, body: string): boolea
     return true;
   }
 
-  const text = `${subject}\n${stripHtml(body)}`;
+  const text = `${subject}\n${normalizeEmailBodyText(body)}`;
   return /\b(?:watch|catch|check out) the replay\b|\bview (?:the )?recording\b|\brecording is (?:now )?available\b|\bcatch up on\b|\breplay on the bridge\b|\bmark your calendar for the next session\b/i.test(
     text
   );
@@ -62,9 +66,10 @@ export function detectReplayPlatform(url: string): string | null {
 
 export function extractReplayUrl(htmlOrText: string): string | null {
   const anchorLinks = extractReplayLinksFromHtml(htmlOrText);
+  const contextualPlainLinks = extractReplayLinksFromPlainText(htmlOrText);
   const plainUrls = extractUrls(htmlOrText);
 
-  const candidates = [...anchorLinks, ...plainUrls];
+  const candidates = [...anchorLinks, ...contextualPlainLinks, ...plainUrls];
   const scored = candidates
     .map((url) => ({ url: sanitizeUrl(url), score: scoreReplayUrl(url, htmlOrText) }))
     .filter((entry) => entry.url && entry.score > 0)
@@ -74,10 +79,20 @@ export function extractReplayUrl(htmlOrText: string): string | null {
 }
 
 export function extractReplayEmailSummary(body: string, subject: string): string {
-  const plain = stripHtml(body);
+  const plain = normalizeEmailBodyText(body);
   const structured = extractStructuredReplaySummary(plain);
   if (structured) {
     return structured.slice(0, 4000);
+  }
+
+  const digest = distillEmailDigest(subject, plain);
+  if (digest) {
+    return digest.slice(0, 4000);
+  }
+
+  const substantive = extractSubstantiveParagraphs(plain);
+  if (substantive.length > 0) {
+    return substantive.join("\n\n").slice(0, 4000);
   }
 
   const lines = plain
@@ -107,7 +122,7 @@ export function parseReplayEmail(parsed: ReplayEmailInput): ReplayEmailContent |
     return null;
   }
 
-  const bodyText = stripHtml(parsed.body);
+  const bodyText = normalizeEmailBodyText(parsed.body);
   const meetingTitle = extractReplayTitleFromSubject(parsed.subject);
   const classification = classifyInternalCall(
     meetingTitle,
@@ -115,7 +130,7 @@ export function parseReplayEmail(parsed: ReplayEmailInput): ReplayEmailContent |
     bodyText
   );
   if (!classification) return null;
-  const replayUrl = extractReplayUrl(parsed.body);
+  const replayUrl = extractReplayUrl(normalizeEmailBodyText(parsed.body) + "\n" + parsed.body);
   const summary = extractReplayEmailSummary(parsed.body, parsed.subject);
 
   if (!replayUrl && summary.length < 20) return null;
@@ -140,7 +155,10 @@ function extractReplayLinksFromHtml(html: string): string[] {
   while (match) {
     const url = match[1];
     const text = match[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    if (/watch|replay|view|recording|play|catch up|bridge/i.test(text)) {
+    const start = Math.max(0, match.index - 220);
+    const end = Math.min(html.length, match.index + match[0].length + 220);
+    const surrounding = html.slice(start, end);
+    if (isReplayAnchorLink(url, text, surrounding)) {
       links.push(url);
     }
     match = anchorRe.exec(html);
@@ -148,12 +166,95 @@ function extractReplayLinksFromHtml(html: string): string[] {
   return links;
 }
 
+const REPLAY_CONTEXT_RE =
+  /\b(?:watch(?:\s+the)?\s+(?:replay|recording)|view(?:\s+the)?\s+recording|catch(?:\s+the)?\s+replay|check out the replay|replay on the bridge|on the bridge|recording is (?:now )?available)\b/i;
+
+function isGenericReplayLinkText(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    /^(?:click\s+)?here\.?$/i.test(trimmed) ||
+    /^this\s+link\.?$/i.test(trimmed) ||
+    /^the\s+replay\.?$/i.test(trimmed) ||
+    /^watch(?:\s+now)?\.?$/i.test(trimmed) ||
+    /^play(?:\s+now)?\.?$/i.test(trimmed) ||
+    /^link\.?$/i.test(trimmed)
+  );
+}
+
+function isReplayAnchorLink(url: string, linkText: string, surroundingHtml: string): boolean {
+  const cleanUrl = sanitizeUrl(url);
+  if (!cleanUrl || /^mailto:|^#/i.test(cleanUrl)) return false;
+  if (/unsubscribe|privacy|preferences|view in browser|online version/i.test(cleanUrl)) {
+    return false;
+  }
+
+  const context = surroundingHtml
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/watch|replay|view|recording|play|catch up|bridge/i.test(linkText)) {
+    return true;
+  }
+
+  if (/click\s+here/i.test(linkText) && REPLAY_CONTEXT_RE.test(context)) {
+    return true;
+  }
+
+  if (isGenericReplayLinkText(linkText) && REPLAY_CONTEXT_RE.test(context)) {
+    return true;
+  }
+
+  return false;
+}
+
+function extractReplayLinksFromPlainText(text: string): string[] {
+  const links: string[] = [];
+  const plain = text.replace(/<[^>]+>/g, " ");
+
+  const inlinePatterns = [
+    /\bwatch(?:\s+the)?\s+replay(?:\s+on\s+the\s+bridge)?\s+here\s*(?:[:.]?\s*)?(?:<\s*)?(https?:\/\/[^\s<>")]+)/gi,
+    /\b(?:catch|check out)(?:\s+the)?\s+replay(?:\s+on\s+the\s+bridge)?\s*(?:[:.]?\s*)?(?:<\s*)?(https?:\/\/[^\s<>")]+)/gi,
+    /\bview(?:\s+the)?\s+recording\s+here\s*(?:[:.]?\s*)?(?:<\s*)?(https?:\/\/[^\s<>")]+)/gi,
+  ];
+
+  for (const pattern of inlinePatterns) {
+    for (const match of plain.matchAll(pattern)) {
+      if (match[1]) links.push(match[1]);
+    }
+  }
+
+  for (const match of plain.matchAll(/\bhere\s+(https?:\/\/\S+)/gi)) {
+    const index = match.index ?? 0;
+    const before = plain.slice(Math.max(0, index - 120), index);
+    if (REPLAY_CONTEXT_RE.test(before) || /\bwatch\b[^\n]{0,40}\bhere\b/i.test(before + match[0])) {
+      links.push(match[1].replace(/[),.]+$/, ""));
+    }
+  }
+
+  for (const match of plain.matchAll(/\b(?:click|watch|view)\s+here\s+(https?:\/\/\S+)/gi)) {
+    links.push(match[1].replace(/[),.]+$/, ""));
+  }
+
+  return links;
+}
+
 function extractUrls(text: string): string[] {
-  return text.match(/https?:\/\/[^\s<>"')]+/gi) ?? [];
+  const urls = new Set<string>();
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"')]+/gi)) {
+    urls.add(match[0]);
+  }
+  for (const match of text.matchAll(/<\s*(https?:\/\/[^>]+)>/gi)) {
+    urls.add(match[1]);
+  }
+  for (const match of text.matchAll(/href=["']([^"']+)["']/gi)) {
+    urls.add(match[1]);
+  }
+  return [...urls];
 }
 
 function sanitizeUrl(url: string): string {
-  return url.replace(/[),.]+$/, "").trim();
+  return url.replace(/^[<\[\(]+|[>\]\),.;]+$/g, "").trim();
 }
 
 function scoreReplayUrl(url: string, context: string): number {
@@ -166,12 +267,30 @@ function scoreReplayUrl(url: string, context: string): number {
   if (/\/(replay|recording|recordings|watch|play|video|calls?)\b/i.test(clean)) {
     score += 4;
   }
-  if (/watch|replay|recording|play/i.test(context) && context.includes(clean)) {
+  const contextNearUrl = extractContextAroundUrl(context, clean, 120);
+  if (/watch the replay|watch the recording|view the replay|catch the replay/i.test(contextNearUrl)) {
+    score += 6;
+  } else if (/watch(?:\s+the)?\s+replay\s+here|replay\s+here/i.test(contextNearUrl)) {
+    score += 5;
+  } else if (/watch|replay|recording|play/i.test(contextNearUrl)) {
     score += 2;
   }
-  if (platform === "sharepoint" && /bridge|replay/i.test(context)) score += 3;
+  if (/en25\.com|\.eloqua\.|elqTrackId/i.test(clean)) score -= 8;
   if (/unsubscribe|privacy|preferences|tracking/i.test(clean)) score -= 10;
+  if (platform === "sharepoint" && /bridge|replay/i.test(context)) score += 3;
   return score;
+}
+
+function extractContextAroundUrl(context: string, url: string, radius: number): string {
+  const clean = sanitizeUrl(url);
+  let index = context.indexOf(clean);
+  if (index < 0 && clean.length > 48) {
+    index = context.indexOf(clean.slice(0, 48));
+  }
+  if (index < 0) return "";
+  const start = Math.max(0, index - radius);
+  const end = Math.min(context.length, index + clean.length + radius);
+  return context.slice(start, end);
 }
 
 function extractStructuredReplaySummary(plain: string): string | null {
@@ -201,34 +320,43 @@ function extractStructuredReplaySummary(plain: string): string | null {
   return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
+function extractSubstantiveParagraphs(plain: string): string[] {
+  return plain
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter((paragraph) => paragraph.length >= 60)
+    .filter((paragraph) => !isBoilerplateLine(paragraph))
+    .filter((paragraph) => !/^https?:\/\//i.test(paragraph))
+    .filter(
+      (paragraph) =>
+        /\b(focused|introduced|discussed|covered|customers?|partners?|replay|session|town hall|ai-era|cyber|defense|resources)\b/i.test(
+          paragraph
+        )
+    )
+    .slice(0, 4);
+}
+
 function isBoilerplateLine(line: string): boolean {
   return (
     /^unsubscribe/i.test(line) ||
     /^view in browser/i.test(line) ||
+    /^if you have trouble viewing/i.test(line) ||
+    /^read the online version/i.test(line) ||
     /^copyright/i.test(line) ||
     /^https?:\/\//i.test(line) ||
     /^check out the replay/i.test(line) ||
-    /^(hi|hello|dear)\b/i.test(line)
+    /^here(?:'|’)s your next step/i.test(line) ||
+    /^sign up for/i.test(line) ||
+    /^global sales communications/i.test(line) ||
+    /^additional resources referenced/i.test(line) ||
+    /^(hi|hello|dear)\b/i.test(line) ||
+    /campaignmgr\.cisco\.com/i.test(line) ||
+    /\.eloqua\.com/i.test(line)
   );
 }
 
 function stripHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<\/div>/gi, "\n")
-    .replace(/<li[^>]*>/gi, "\n- ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return normalizeEmailBodyText(html);
 }
 
 export function isDirectMediaReplayUrl(url: string): boolean {

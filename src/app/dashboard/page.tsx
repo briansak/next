@@ -28,13 +28,14 @@ import { NextStepsPanel, type NextStepCardItem } from "@/components/next-steps-p
 import { suggestEventPrepTodos } from "@/lib/heuristics/event-prep-suggestions";
 import {
   applyUserNextStepOrder,
-  formatNextStepHeadline,
-  formatNextStepMeta,
+  formatNextStepCardDisplay,
 } from "@/lib/heuristics/next-step-display";
 import { applyViewerPriorityOverride } from "@/lib/communications/viewer-override";
 import { isPrioritiesCommunication } from "@/lib/communications/space-purpose";
 import { isInternalCallCommunication } from "@/lib/communications/internal-call";
+import { isProductAnnouncementCommunication } from "@/lib/communications/product-announcement";
 import { scopedToTenant } from "@/lib/tenant";
+import { travelLogisticsLabel } from "@/lib/heuristics/calendar-event-clustering";
 
 interface CommunicationMetadata {
   mentionedUserIds?: string[];
@@ -58,6 +59,12 @@ interface CalendarMetadata {
   location?: string;
   attendeeEmails?: string[];
   externalAttendees?: string[];
+  eventKind?: string;
+  parentEventId?: string;
+  clusterId?: string;
+  destinationHint?: string;
+  missingTravel?: boolean;
+  linkedTravelIds?: string[];
 }
 
 interface MeetingActionItem {
@@ -166,7 +173,12 @@ export default async function DashboardPage() {
     .filter(
       (c) =>
         isPrioritiesCommunication(c.source, c.metadata) &&
-        !isInternalCallCommunication(c.source, c.subject, c.tags, c.metadata)
+        !isInternalCallCommunication(c.source, c.subject, c.tags, c.metadata) &&
+        !isProductAnnouncementCommunication(c.tags, c.metadata) &&
+        !(
+          c.source === "OUTLOOK_CALENDAR" &&
+          (c.tags.includes("calendar-hold") || c.tags.includes("routine"))
+        )
     )
     .map((c) => {
       const metadata = (c.metadata ?? {}) as CommunicationMetadata;
@@ -216,12 +228,20 @@ export default async function DashboardPage() {
     .filter((c) => c.source === "OUTLOOK_CALENDAR" && c.receivedAt > now)
     .map((c) => {
       const meta = (c.metadata ?? {}) as CalendarMetadata;
-      if (meta.isRecurring || !c.tags.includes("plan-ahead")) return null;
+      if (
+        meta.isRecurring ||
+        c.tags.includes("calendar-hold") ||
+        c.tags.includes("routine")
+      ) {
+        return null;
+      }
+      const isRockEvent = c.tags.includes("rock-event");
+      if (!c.tags.includes("plan-ahead") && !isRockEvent) return null;
       const planningScore = computePlanningDashboardScore({
-        baseScore: c.priorityScore,
+        baseScore: isRockEvent ? Math.max(c.priorityScore, 6) : c.priorityScore,
         start: c.receivedAt,
         tags: c.tags,
-        needsPlanning: meta.needsPlanning ?? false,
+        needsPlanning: meta.needsPlanning ?? isRockEvent,
         now,
       });
       const overrideApplied = applyViewerPriorityOverride(
@@ -241,12 +261,23 @@ export default async function DashboardPage() {
       };
     })
     .filter((c): c is NonNullable<typeof c> => c !== null && !c.hidden && c.score >= 4)
+    .filter((c) => !(c.calendarMeta.parentEventId && c.tags.includes("travel-logistics")))
     .sort(
       (a, b) =>
         a.receivedAt.getTime() - b.receivedAt.getTime() ||
         b.score - a.score
     )
     .slice(0, 6);
+
+  const linkedTravelByParent = new Map<string, typeof rawCommunications>();
+  for (const event of rawCommunications) {
+    if (event.source !== "OUTLOOK_CALENDAR" || event.receivedAt <= now) continue;
+    const meta = (event.metadata ?? {}) as CalendarMetadata;
+    if (!meta.parentEventId) continue;
+    const siblings = linkedTravelByParent.get(meta.parentEventId) ?? [];
+    siblings.push(event);
+    linkedTravelByParent.set(meta.parentEventId, siblings);
+  }
 
   const isAdmin = session.role === "ADMIN";
   const rawMeetings = await prisma.communication
@@ -312,14 +343,76 @@ export default async function DashboardPage() {
     )
     .slice(0, 8);
 
-  const summaryMap = await resolveDashboardSummaries(
-    [
-      ...communications.map(toDashboardSummaryItem),
-      ...planningEvents.map(toDashboardSummaryItem),
-      ...meetings.map(toDashboardSummaryItem),
-    ],
-    { maxGenerations: 15, concurrency: 4 }
-  );
+  const nextSteps = await prisma.nextStep
+    .findMany({
+      where: {
+        ...tenantWhere,
+        status: { in: ["OPEN", "IN_PROGRESS"] },
+        OR: [{ assigneeId: session.userId }, { assigneeId: null }],
+        AND: [
+          {
+            OR: [
+              { communicationId: null },
+              { communication: { receivedAt: { gte: daysAgo(14) } } },
+              {
+                communication: {
+                  source: "OUTLOOK_CALENDAR",
+                  receivedAt: { gt: now },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      include: {
+        communication: {
+          select: {
+            id: true,
+            tenantId: true,
+            receivedAt: true,
+            source: true,
+            subject: true,
+            authorName: true,
+            excerpt: true,
+            summary: true,
+            body: true,
+            metadata: true,
+          },
+        },
+      },
+      orderBy: [{ priority: "desc" }, { dueAt: "asc" }],
+      take: 10,
+    })
+    .catch(() => [])
+    .then((steps) =>
+      applyUserNextStepOrder(
+        steps.sort((a, b) => {
+          const aDate = a.communication?.receivedAt?.getTime() ?? 0;
+          const bDate = b.communication?.receivedAt?.getTime() ?? 0;
+          return bDate - aDate;
+        }),
+        savedNextStepOrder
+      )
+    );
+
+  const summaryBatchIds = new Set<string>();
+  const summaryBatch: DashboardSummaryItem[] = [];
+  for (const item of [...communications, ...planningEvents, ...meetings]) {
+    if (summaryBatchIds.has(item.id)) continue;
+    summaryBatchIds.add(item.id);
+    summaryBatch.push(toDashboardSummaryItem(item));
+  }
+  for (const step of nextSteps) {
+    const communication = step.communication;
+    if (!communication || summaryBatchIds.has(communication.id)) continue;
+    summaryBatchIds.add(communication.id);
+    summaryBatch.push(toDashboardSummaryItem(communication));
+  }
+
+  const summaryMap = await resolveDashboardSummaries(summaryBatch, {
+    maxGenerations: 0,
+    allowOllama: false,
+  });
 
   const planningEventIds = planningEvents.map((event) => event.id);
   const eventNextSteps =
@@ -350,72 +443,37 @@ export default async function DashboardPage() {
     nextStepsByEvent.set(step.communicationId, list);
   }
 
-  const nextSteps = await prisma.nextStep
-    .findMany({
-      where: {
-        ...tenantWhere,
-        status: { in: ["OPEN", "IN_PROGRESS"] },
-        OR: [
-          { assigneeId: session.userId },
-          { assigneeId: null },
-        ],
-        AND: [
-          {
-            OR: [
-              { communicationId: null },
-              { communication: { receivedAt: { gte: daysAgo(14) } } },
-              {
-                communication: {
-                  source: "OUTLOOK_CALENDAR",
-                  receivedAt: { gt: now },
-                },
-              },
-            ],
-          },
-        ],
+  const nextStepCards: NextStepCardItem[] = nextSteps.map((step) => {
+    const communication = step.communication;
+    const dashboardSummary = communication
+      ? summaryMap.get(communication.id)
+      : undefined;
+    const display = formatNextStepCardDisplay(
+      {
+        title: step.title,
+        status: step.status,
+        dueAt: step.dueAt,
+        communication,
       },
-      include: {
-        communication: {
-          select: {
-            receivedAt: true,
-            source: true,
-            subject: true,
-            authorName: true,
-            excerpt: true,
-          },
-        },
-      },
-      orderBy: [{ priority: "desc" }, { dueAt: "asc" }],
-      take: 10,
-    })
-    .catch(() => [])
-    .then((steps) =>
-      applyUserNextStepOrder(
-        steps.sort((a, b) => {
-          const aDate = a.communication?.receivedAt?.getTime() ?? 0;
-          const bDate = b.communication?.receivedAt?.getTime() ?? 0;
-          return bDate - aDate;
-        }),
-        savedNextStepOrder
-      )
+      dashboardSummary
+        ? {
+            text: dashboardSummary.text,
+            label: dashboardSummary.label,
+            source: dashboardSummary.source,
+          }
+        : null
     );
 
-  const nextStepCards: NextStepCardItem[] = nextSteps.map((step) => ({
-    id: step.id,
-    headline: formatNextStepHeadline({
-      title: step.title,
-      status: step.status,
-      dueAt: step.dueAt,
-      communication: step.communication,
-    }),
-    meta: formatNextStepMeta({
-      title: step.title,
-      status: step.status,
-      dueAt: step.dueAt,
-      communication: step.communication,
-    }),
-    communicationId: step.communicationId,
-  }));
+    return {
+      id: step.id,
+      headline: display.headline,
+      meta: display.meta,
+      communicationId: step.communicationId,
+      summaryText: display.summary?.text ?? null,
+      summaryLabel: display.summary?.label ?? null,
+      summarySource: display.summary?.source ?? null,
+    };
+  });
 
   return (
     <main style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem 1.5rem" }}>
@@ -453,9 +511,19 @@ export default async function DashboardPage() {
               <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                 {planningEvents.map((event) => {
                   const meta = event.calendarMeta;
+                  const linkedTravel = linkedTravelByParent.get(event.id) ?? [];
                   const attendeePreview =
                     meta.externalAttendees?.slice(0, 2).join(", ") ||
                     meta.attendeeEmails?.slice(0, 2).join(", ");
+                  const prepSuggestions = suggestEventPrepTodos({
+                    subject: event.subject ?? "Upcoming event",
+                    location: meta.location,
+                    tags: event.tags,
+                    daysUntil: meta.daysUntil,
+                  }).filter((suggestion) => {
+                    if (!/book travel/i.test(suggestion)) return true;
+                    return meta.missingTravel === true;
+                  });
                   return (
                     <li
                       key={event.id}
@@ -492,7 +560,19 @@ export default async function DashboardPage() {
                                   )
                               )}
                             </span>
-                            {event.tags.includes("big-rock") && (
+                            {event.tags.includes("rock-event") && (
+                              <span
+                                style={{
+                                  fontSize: "0.65rem",
+                                  fontWeight: 600,
+                                  color: "var(--high)",
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                Rock event
+                              </span>
+                            )}
+                            {event.tags.includes("big-rock") && !event.tags.includes("rock-event") && (
                               <span
                                 style={{
                                   fontSize: "0.65rem",
@@ -502,6 +582,18 @@ export default async function DashboardPage() {
                                 }}
                               >
                                 Big rock
+                              </span>
+                            )}
+                            {meta.missingTravel && (
+                              <span
+                                style={{
+                                  fontSize: "0.65rem",
+                                  fontWeight: 600,
+                                  color: "var(--critical)",
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                Travel not booked
                               </span>
                             )}
                           </div>
@@ -517,24 +609,63 @@ export default async function DashboardPage() {
                           label={summaryMap.get(event.id)?.label}
                           source={summaryMap.get(event.id)?.source}
                         />
-                        {(meta.location || attendeePreview) && (
+                        {(meta.location || attendeePreview || meta.destinationHint) && (
                           <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
-                            {meta.location ? `Location: ${meta.location}` : null}
-                            {meta.location && attendeePreview ? " · " : null}
+                            {meta.destinationHint
+                              ? `Destination: ${meta.destinationHint}`
+                              : meta.location
+                                ? `Location: ${meta.location}`
+                                : null}
+                            {(meta.destinationHint || meta.location) && attendeePreview ? " · " : null}
                             {attendeePreview ? `With: ${attendeePreview}` : null}
                           </p>
+                        )}
+                        {linkedTravel.length > 0 && (
+                          <ul
+                            style={{
+                              listStyle: "none",
+                              marginTop: "0.5rem",
+                              paddingLeft: "0.75rem",
+                              borderLeft: "2px solid var(--border)",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "0.35rem",
+                            }}
+                          >
+                            {linkedTravel.map((travel) => {
+                              const travelMeta = (travel.metadata ?? {}) as CalendarMetadata;
+                              return (
+                                <li key={travel.id} style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                                  <span
+                                    style={{
+                                      fontSize: "0.62rem",
+                                      fontWeight: 600,
+                                      color: "var(--low)",
+                                      textTransform: "uppercase",
+                                      marginRight: "0.35rem",
+                                    }}
+                                  >
+                                    {travelLogisticsLabel(
+                                      (travelMeta.eventKind as
+                                        | "travel-flight"
+                                        | "travel-hotel"
+                                        | "travel-other"
+                                        | "meeting"
+                                        | "conference") ?? "travel-other"
+                                    )}
+                                  </span>
+                                  {travel.subject} · {formatFutureDate(travel.receivedAt)}
+                                </li>
+                              );
+                            })}
+                          </ul>
                         )}
                       </DashboardPlanningCardLink>
                       <div style={{ padding: "0 0.75rem 0.75rem" }}>
                         <EventPlanningTodos
                           communicationId={event.id}
                           eventSubject={event.subject ?? "this event"}
-                          suggestions={suggestEventPrepTodos({
-                            subject: event.subject ?? "Upcoming event",
-                            location: meta.location,
-                            tags: event.tags,
-                            daysUntil: meta.daysUntil,
-                          })}
+                          suggestions={prepSuggestions}
                           existingSteps={nextStepsByEvent.get(event.id) ?? []}
                         />
                       </div>

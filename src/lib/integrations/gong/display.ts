@@ -1,3 +1,5 @@
+import { fixMojibake } from "@/lib/integrations/email/body-text";
+
 export interface GongSummaryDisplay {
   overview: string | null;
   takeaways: string[];
@@ -54,7 +56,7 @@ export function formatGongSummaryForDisplay(
   text: string,
   options?: { maxTakeaways?: number }
 ): GongSummaryDisplay {
-  const trimmed = text.trim();
+  const trimmed = fixMojibake(text.trim());
   if (!trimmed) {
     return { overview: null, takeaways: [] };
   }

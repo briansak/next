@@ -3,6 +3,11 @@ import { analyzeCommunication, scoreToPriority } from "@/lib/heuristics";
 import { analyzeCalendarEvent } from "@/lib/heuristics/calendar-planning";
 import { tryCorrelateGongEmail } from "@/lib/integrations/gong/correlate";
 import { tryIngestReplayEmail, backfillInternalCallReplays, type BackfillInternalCallsResult } from "@/lib/integrations/internal-calls/replay-ingest";
+import {
+  backfillProductAnnouncements,
+  tryIngestProductAnnouncementEmail,
+  type BackfillProductAnnouncementsResult,
+} from "@/lib/integrations/email/product-announcement-ingest";
 import { INTERNAL_CALL_LOOKBACK_DAYS } from "@/lib/integrations/gong/internal-calls";
 import {
   scoreCalendarPartnerPriority,
@@ -40,6 +45,13 @@ import {
   refreshMicrosoft365Token,
 } from "@/lib/integrations/microsoft365";
 import { getTenantMembers } from "@/lib/tenant/members";
+import { normalizeEmailBodyText } from "@/lib/integrations/email/body-text";
+import {
+  calendarEventKindFromInput,
+  calendarKindTags,
+  calendarRequiresTravelFlag,
+  reconcileCalendarEventClusters,
+} from "@/lib/integrations/email/calendar-clusters";
 
 export const EMAIL_LOOKBACK_DAYS = 14;
 
@@ -118,16 +130,8 @@ export async function isEmailIngestionActive(tenantId: string): Promise<boolean>
   return !!policy;
 }
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-}
-
 function plainBody(message: EmailMessage): string {
-  const raw = message.body ?? "";
-  if (raw.includes("<") && raw.includes(">")) {
-    return stripHtml(raw);
-  }
-  return raw.trim();
+  return normalizeEmailBodyText(message.body ?? "");
 }
 
 export async function ingestEmailMessage(
@@ -170,6 +174,24 @@ export async function ingestEmailMessage(
     return {
       created: replayResult.created,
       id: replayResult.id ?? message.messageId,
+    };
+  }
+
+  const announcementResult = await tryIngestProductAnnouncementEmail(tenantId, {
+    messageId: message.messageId,
+    subject: message.subject,
+    body: message.body,
+    fromAddress: message.fromAddress,
+    fromName: message.fromName,
+    receivedAt: message.receivedAt,
+    threadId: message.threadId,
+    toAddresses: message.toAddresses ?? [],
+    ccAddresses: message.ccAddresses ?? [],
+  });
+  if (announcementResult.handled) {
+    return {
+      created: announcementResult.created,
+      id: announcementResult.id ?? message.messageId,
     };
   }
 
@@ -319,6 +341,11 @@ export interface EmailSyncResult {
     upgraded: number;
     skipped: number;
   };
+  productAnnouncementsBackfill?: {
+    scanned: number;
+    upgraded: number;
+    created: number;
+  };
 }
 
 export async function syncEmailMessages(
@@ -422,6 +449,7 @@ export async function syncEmailMessages(
   }
 
   const backfill = await backfillInternalCallReplays(tenantId);
+  const productAnnouncementsBackfill = await backfillProductAnnouncements(tenantId);
 
   return {
     fetched: allMessages.length,
@@ -431,6 +459,7 @@ export async function syncEmailMessages(
     connectedAs,
     personalReplayCandidates: personalReplayMessages.length,
     internalCallsBackfill: backfill,
+    productAnnouncementsBackfill,
   };
 }
 
@@ -496,6 +525,7 @@ export interface EmlImportResult {
   rejected: number;
   errors: string[];
   internalCallsBackfill?: BackfillInternalCallsResult;
+  productAnnouncementsBackfill?: BackfillProductAnnouncementsResult;
 }
 
 /** Import .eml files saved from Outlook — no Azure app registration required. */
@@ -573,8 +603,9 @@ export async function importEmlFiles(
   }
 
   const backfill = await backfillInternalCallReplays(tenantId);
+  const productAnnouncementsBackfill = await backfillProductAnnouncements(tenantId);
 
-  return { imported, skipped, rejected, errors, internalCallsBackfill: backfill };
+  return { imported, skipped, rejected, errors, internalCallsBackfill: backfill, productAnnouncementsBackfill };
 }
 
 function buildCalendarBody(event: CalendarEvent): string {
@@ -629,11 +660,14 @@ export async function ingestCalendarEvent(
     partnerDomains,
   });
 
+  const isCalendarNoise =
+    analysis.tags.includes("calendar-hold") || analysis.tags.includes("routine");
+
   const partnerMatch = scoreCalendarPartnerPriority(
     { summary: event.summary, organizerEmail: event.organizerEmail },
     allowlist
   );
-  if (partnerMatch.matched) {
+  if (partnerMatch.matched && !isCalendarNoise) {
     analysis.priorityScore = Math.min(
       10,
       analysis.priorityScore + partnerMatch.scoreBoost
@@ -641,6 +675,37 @@ export async function ingestCalendarEvent(
     analysis.priority = scoreToPriority(analysis.priorityScore);
     analysis.priorityReasons.push(...partnerMatch.reasons);
     analysis.tags.push(...partnerMatch.tags);
+  }
+
+  if (isCalendarNoise) {
+    analysis.priorityScore = 0;
+    analysis.priority = "INFO";
+    analysis.needsPlanning = false;
+    analysis.suggestedAction = undefined;
+  }
+
+  const eventKind = calendarEventKindFromInput(event);
+  const kindTags = isCalendarNoise ? [] : calendarKindTags(eventKind);
+  analysis.tags.push(...kindTags);
+
+  if (!isCalendarNoise && eventKind === "conference") {
+    analysis.priorityScore = Math.min(10, analysis.priorityScore + 2);
+    analysis.priority = scoreToPriority(analysis.priorityScore);
+    analysis.priorityReasons.push("Conference or major industry event");
+    if (analysis.needsPlanning) {
+      analysis.tags.push("needs-prep");
+    }
+  } else if (
+    !isCalendarNoise &&
+    (eventKind === "travel-flight" ||
+      eventKind === "travel-hotel" ||
+      eventKind === "travel-other")
+  ) {
+    analysis.needsPlanning = false;
+    analysis.priorityScore = 1;
+    analysis.priority = "INFO";
+    analysis.suggestedAction = undefined;
+    analysis.priorityReasons.push("Travel logistics linked to a larger trip");
   }
 
   const externalId = calendarEventId(event.uid, event.start);
@@ -687,6 +752,8 @@ export async function ingestCalendarEvent(
       daysUntil: analysis.daysUntil,
       durationMinutes: analysis.durationMinutes,
       externalAttendees: analysis.externalAttendees,
+      eventKind,
+      requiresTravel: calendarRequiresTravelFlag(event),
     },
   };
 
@@ -798,6 +865,10 @@ export async function importOutlookArchive(
     }
   }
 
+  if (calendarResult.imported > 0 || calendarResult.skipped > 0) {
+    await reconcileCalendarEventClusters(tenantId).catch(() => undefined);
+  }
+
   return {
     emails: {
       imported: emailResult.imported,
@@ -820,6 +891,7 @@ export interface AppleMailImportResult {
   warnings: string[];
   errors: string[];
   internalCallsBackfill?: BackfillInternalCallsResult;
+  productAnnouncementsBackfill?: BackfillProductAnnouncementsResult;
 }
 
 /** Read local Apple Mail cache (~/Library/Mail) and import allowlisted messages. */
@@ -926,6 +998,7 @@ export async function importFromAppleMail(
   }
 
   const backfill = await backfillInternalCallReplays(tenantId);
+  const productAnnouncementsBackfill = await backfillProductAnnouncements(tenantId);
 
   return {
     scanned: scan.filesScanned,
@@ -937,6 +1010,7 @@ export async function importFromAppleMail(
     warnings: scan.warnings,
     errors: errors.slice(0, 20),
     internalCallsBackfill: backfill,
+    productAnnouncementsBackfill,
   };
 }
 
@@ -1026,6 +1100,10 @@ export async function importFromAppleCalendar(
         `${raw.summary}: ${err instanceof Error ? err.message : "import failed"}`
       );
     }
+  }
+
+  if (imported > 0 || skipped > 0) {
+    await reconcileCalendarEventClusters(tenantId).catch(() => undefined);
   }
 
   return {

@@ -185,7 +185,8 @@ export default async function IngestionSettingsPage({
         <p style={{ color: "var(--text-muted)", fontSize: "0.75rem", marginBottom: "1rem", lineHeight: 1.5 }}>
           Enable the <strong>same scopes</strong> on your integration at developer.webex.com.
           For meetings (summaries, recordings, transcripts) use{" "}
-          <code>WEBEX_SCOPE_MODE=standard+meetings</code> and reconnect Webex.
+          <code>WEBEX_SCOPE_MODE=standard+meetings+vidcast</code> for Vidcast AI
+          highlights, then reconnect Webex.
         </p>
         <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", marginBottom: "1rem" }}>
           Uses Webex REST API (same backend as Messaging MCP tools). See{" "}

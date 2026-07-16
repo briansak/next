@@ -1,5 +1,10 @@
 import type { CommunicationSource, Prisma } from "@prisma/client";
 import { summarizeMeetingTranscript, summarizeWithOllama } from "./ollama";
+import {
+  condenseLongSummary,
+  distillEmailDigest,
+} from "./email-digest-summary";
+import { normalizeEmailBodyText } from "../integrations/email/body-text";
 
 export const DASHBOARD_SUMMARY_LABELS = {
   "webex-ai": "Webex AI",
@@ -69,8 +74,19 @@ function plainText(body: string): string {
 export function buildHeuristicDashboardSummary(
   item: DashboardSummaryItem
 ): DashboardSummary {
-  const subject = item.subject?.trim();
-  const body = plainText(item.body);
+  const subject = item.subject?.trim() ?? "";
+  const body = normalizeEmailBodyText(item.body);
+
+  const digest = distillEmailDigest(subject, body);
+  if (digest) {
+    return {
+      text: digest,
+      source: "heuristic",
+      label: DASHBOARD_SUMMARY_LABELS.heuristic,
+      fromCache: false,
+    };
+  }
+
   const sentences =
     body.match(/[^.!?]+[.!?]+/g)?.map((s) => s.trim()).filter((s) => s.length > 12) ??
     [];
@@ -180,7 +196,7 @@ function buildSummaryContext(item: DashboardSummaryItem): string {
 
 function buildSummaryBody(item: DashboardSummaryItem): string {
   const meta = (item.metadata ?? {}) as SummaryMetadata;
-  const body = plainText(item.body);
+  const body = normalizeEmailBodyText(item.body);
 
   if (item.source === "WEBEX_MEETING") {
     return [
@@ -219,17 +235,40 @@ export function pickExistingDashboardSummary(
 }
 
 export async function resolveDashboardSummary(
-  item: DashboardSummaryItem
+  item: DashboardSummaryItem,
+  options?: { allowOllama?: boolean }
 ): Promise<DashboardSummary> {
+  const allowOllama = options?.allowOllama !== false;
   const existing = pickExistingDashboardSummary(item);
-  if (existing) return existing;
+  if (existing) {
+    const condensed = condenseLongSummary(existing.text, item.subject ?? undefined);
+    if (condensed && condensed !== existing.text) {
+      return {
+        text: condensed,
+        source: existing.source,
+        label: existing.label,
+        fromCache: false,
+      };
+    }
+    return existing;
+  }
 
   const body = buildSummaryBody(item);
+  const digest = distillEmailDigest(item.subject ?? "", body);
+  if (digest) {
+    return {
+      text: digest,
+      source: "heuristic",
+      label: DASHBOARD_SUMMARY_LABELS.heuristic,
+      fromCache: false,
+    };
+  }
+
   if (!body.trim() && !item.subject) {
     return buildHeuristicDashboardSummary(item);
   }
 
-  if (item.source === "WEBEX_MEETING") {
+  if (allowOllama && item.source === "WEBEX_MEETING") {
     const meta = (item.metadata ?? {}) as SummaryMetadata;
     if (meta.transcriptText?.trim()) {
       const transcriptSummary = await summarizeMeetingTranscript(
@@ -247,7 +286,7 @@ export async function resolveDashboardSummary(
     }
   }
 
-  if (dashboardSummariesEnabled()) {
+  if (allowOllama && dashboardSummariesEnabled()) {
     const ai = await summarizeWithOllama({
       subject: item.subject ?? undefined,
       body,
@@ -312,10 +351,11 @@ async function mapWithConcurrency<T, R>(
 
 export async function resolveDashboardSummaries(
   items: DashboardSummaryItem[],
-  options?: { maxGenerations?: number; concurrency?: number }
+  options?: { maxGenerations?: number; concurrency?: number; allowOllama?: boolean }
 ): Promise<Map<string, DashboardSummary>> {
   const maxGenerations = options?.maxGenerations ?? 12;
   const concurrency = options?.concurrency ?? 4;
+  const allowOllama = options?.allowOllama !== false;
   const result = new Map<string, DashboardSummary>();
 
   const immediate: DashboardSummaryItem[] = [];
@@ -332,7 +372,7 @@ export async function resolveDashboardSummaries(
 
   const toGenerate = needsGeneration.slice(0, maxGenerations);
   const generated = await mapWithConcurrency(toGenerate, concurrency, async (item) => {
-    const summary = await resolveDashboardSummary(item);
+    const summary = await resolveDashboardSummary(item, { allowOllama });
     await persistDashboardSummary(item, summary).catch(() => undefined);
     return { id: item.id, summary };
   });

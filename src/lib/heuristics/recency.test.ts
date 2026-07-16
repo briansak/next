@@ -38,6 +38,12 @@ describe("warrantsAction", () => {
   it("returns true for mentions even with noise tag", () => {
     expect(warrantsAction(["noise", "mentioned-you"])).toBe(true);
   });
+
+  it("returns false for calendar holds and routine events", () => {
+    expect(warrantsAction(["calendar", "calendar-hold"])).toBe(false);
+    expect(warrantsAction(["calendar", "routine"])).toBe(false);
+    expect(warrantsAction(["travel-logistics", "travel-flight"])).toBe(false);
+  });
 });
 
 describe("computeDashboardScore", () => {
@@ -97,5 +103,19 @@ describe("computeDashboardScore", () => {
 
     expect(result.deprioritized).toBe(true);
     expect(result.adjustments).toContain("No clear action needed");
+  });
+
+  it("deprioritizes colleague PTO even with a high base score", () => {
+    const result = computeDashboardScore({
+      baseScore: 8,
+      receivedAt: new Date("2026-07-20T10:00:00Z"),
+      tags: ["calendar", "calendar-hold"],
+      mentionedYou: false,
+      hasOpenNextStep: false,
+      now,
+    });
+
+    expect(result.deprioritized).toBe(true);
+    expect(result.priority).toBe("INFO");
   });
 });

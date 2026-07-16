@@ -7,6 +7,7 @@ import {
   summarizeMeetingTranscript,
   summarizeWithOllama,
 } from "@/lib/heuristics/ollama";
+import { condenseLongSummary, distillEmailDigest } from "@/lib/heuristics/email-digest-summary";
 import {
   isDirectMediaReplayUrl,
   type ReplayEmailContent,
@@ -26,7 +27,16 @@ export async function enrichReplaySummary(
   const emailSummary = content.summary.trim();
   const actionItems: string[] = [];
 
+  const digest = distillEmailDigest(content.meetingTitle, content.bodyText);
+  if (digest) {
+    return { summary: digest, source: "email", actionItems };
+  }
+
   if (emailSummary.length >= 160) {
+    const condensed = condenseLongSummary(emailSummary, content.meetingTitle);
+    if (condensed) {
+      return { summary: condensed, source: "email", actionItems };
+    }
     return { summary: emailSummary, source: "email", actionItems };
   }
 

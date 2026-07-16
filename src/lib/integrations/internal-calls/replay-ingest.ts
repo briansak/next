@@ -7,6 +7,7 @@ import {
 } from "@/lib/integrations/gong/internal-calls";
 import { enrichReplaySummary } from "./replay-enrich";
 import { parseReplayEmail, type ReplayEmailContent } from "./replay-email";
+import { looksLikeEncodedEmailBody } from "../../integrations/email/body-text";
 
 export interface ReplayIngestResult {
   handled: boolean;
@@ -125,6 +126,7 @@ export interface BackfillInternalCallsResult {
   ingested: number;
   upgraded: number;
   skipped: number;
+  refreshed?: number;
 }
 
 export async function backfillInternalCallReplays(
@@ -192,10 +194,188 @@ export async function backfillInternalCallReplays(
     }
   }
 
+  const encodedRefresh = await refreshEncodedInternalCalls(tenantId);
+  const summaryRefresh = await refreshLongInternalCallSummaries(tenantId);
+  const replayUrlRefresh = await refreshMissingReplayUrls(tenantId);
+
   return {
     scanned: emails.length,
     ingested,
     upgraded,
     skipped,
+    refreshed: encodedRefresh.refreshed + summaryRefresh.refreshed + replayUrlRefresh.refreshed,
   };
+}
+
+async function refreshEncodedInternalCalls(
+  tenantId: string
+): Promise<{ refreshed: number }> {
+  const since = new Date();
+  since.setDate(since.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
+
+  const internalCalls = await prisma.communication.findMany({
+    where: {
+      tenantId,
+      source: "EMAIL",
+      tags: { has: "internal-call" },
+      receivedAt: { gte: since },
+    },
+    select: {
+      id: true,
+      externalId: true,
+      subject: true,
+      body: true,
+      summary: true,
+      authorEmail: true,
+      receivedAt: true,
+    },
+    take: 100,
+    orderBy: { receivedAt: "desc" },
+  });
+
+  let refreshed = 0;
+
+  for (const email of internalCalls) {
+    if (
+      !looksLikeEncodedEmailBody(email.body) &&
+      !looksLikeEncodedEmailBody(email.summary ?? "")
+    ) {
+      continue;
+    }
+
+    const replay = parseReplayEmail({
+      messageId: email.externalId,
+      subject: email.subject ?? "",
+      body: email.body,
+      fromAddress: email.authorEmail ?? "",
+      receivedAt: email.receivedAt,
+      toAddresses: [],
+      ccAddresses: [],
+    });
+
+    if (!replay) continue;
+
+    try {
+      await upsertInternalCallReplay(tenantId, replay, email.id);
+      refreshed++;
+    } catch {
+      /* skip */
+    }
+  }
+
+  return { refreshed };
+}
+
+async function refreshLongInternalCallSummaries(
+  tenantId: string
+): Promise<{ refreshed: number }> {
+  const since = new Date();
+  since.setDate(since.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
+
+  const internalCalls = await prisma.communication.findMany({
+    where: {
+      tenantId,
+      source: "EMAIL",
+      tags: { has: "internal-call" },
+      receivedAt: { gte: since },
+    },
+    select: {
+      id: true,
+      externalId: true,
+      subject: true,
+      body: true,
+      summary: true,
+      authorEmail: true,
+      receivedAt: true,
+      metadata: true,
+    },
+    take: 100,
+    orderBy: { receivedAt: "desc" },
+  });
+
+  let refreshed = 0;
+
+  for (const email of internalCalls) {
+    const meta = (email.metadata ?? {}) as { gongSummaryText?: string };
+    const currentSummary = meta.gongSummaryText ?? email.summary ?? "";
+    if (currentSummary.length < 280 || currentSummary.includes("\n- ")) {
+      continue;
+    }
+
+    const replay = parseReplayEmail({
+      messageId: email.externalId,
+      subject: email.subject ?? "",
+      body: email.body,
+      fromAddress: email.authorEmail ?? "",
+      receivedAt: email.receivedAt,
+      toAddresses: [],
+      ccAddresses: [],
+    });
+
+    if (!replay) continue;
+
+    try {
+      await upsertInternalCallReplay(tenantId, replay, email.id);
+      refreshed++;
+    } catch {
+      /* skip */
+    }
+  }
+
+  return { refreshed };
+}
+
+async function refreshMissingReplayUrls(
+  tenantId: string
+): Promise<{ refreshed: number }> {
+  const since = new Date();
+  since.setDate(since.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
+
+  const internalCalls = await prisma.communication.findMany({
+    where: {
+      tenantId,
+      source: "EMAIL",
+      tags: { has: "internal-call" },
+      receivedAt: { gte: since },
+    },
+    select: {
+      id: true,
+      externalId: true,
+      subject: true,
+      body: true,
+      authorEmail: true,
+      receivedAt: true,
+      metadata: true,
+    },
+    take: 100,
+    orderBy: { receivedAt: "desc" },
+  });
+
+  let refreshed = 0;
+
+  for (const email of internalCalls) {
+    const meta = (email.metadata ?? {}) as { replayUrl?: string | null };
+    if (meta.replayUrl) continue;
+
+    const replay = parseReplayEmail({
+      messageId: email.externalId,
+      subject: email.subject ?? "",
+      body: email.body,
+      fromAddress: email.authorEmail ?? "",
+      receivedAt: email.receivedAt,
+      toAddresses: [],
+      ccAddresses: [],
+    });
+
+    if (!replay?.replayUrl) continue;
+
+    try {
+      await upsertInternalCallReplay(tenantId, replay, email.id);
+      refreshed++;
+    } catch {
+      /* skip */
+    }
+  }
+
+  return { refreshed };
 }

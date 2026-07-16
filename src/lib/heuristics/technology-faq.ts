@@ -334,7 +334,7 @@ export async function summarizeTechnologyFaqWithOllama(
   threads: TechnologyThread[]
 ): Promise<TechnologySpaceFaq | null> {
   const baseUrl = process.env.OLLAMA_BASE_URL?.trim();
-  const model = process.env.OLLAMA_MODEL ?? "llama3.2";
+  const model = process.env.OLLAMA_MODEL ?? "llama3.1:8b";
   if (!baseUrl || threads.length === 0) return null;
 
   const qualifying = threads.filter(threadHasQuestion).slice(0, MAX_THREADS);
@@ -495,6 +495,7 @@ export async function resolveTechnologySpaceFaq(input: {
   technologyLabel: string | null;
   messages: TechnologyThreadMessage[];
   cache: unknown;
+  allowOllama?: boolean;
   persistCache?: (cache: Prisma.InputJsonValue) => Promise<void>;
 }): Promise<TechnologySpaceFaq> {
   const threads = groupIntoThreads(input.messages);
@@ -504,11 +505,14 @@ export async function resolveTechnologySpaceFaq(input: {
   const cached = readFaqCache(input.cache, messageCount, threadCount);
   if (cached) return cached;
 
-  const ollama = await summarizeTechnologyFaqWithOllama(
-    input.spaceTitle,
-    input.technologyLabel,
-    threads
-  );
+  const ollama =
+    input.allowOllama === false
+      ? null
+      : await summarizeTechnologyFaqWithOllama(
+          input.spaceTitle,
+          input.technologyLabel,
+          threads
+        );
 
   const faq = ollama ?? buildHeuristicTechnologyFaq(threads);
 

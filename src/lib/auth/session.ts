@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
 import type { MemberRole } from "@prisma/client";
@@ -37,7 +38,7 @@ export async function destroySession(token: string): Promise<void> {
   await prisma.session.deleteMany({ where: { tokenHash } });
 }
 
-export async function getAuthSession(): Promise<AuthSession | null> {
+export const getAuthSession = cache(async (): Promise<AuthSession | null> => {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -80,7 +81,7 @@ export async function getAuthSession(): Promise<AuthSession | null> {
     partnerName: membership.tenant.partner?.name ?? null,
     role: membership.role,
   };
-}
+});
 
 export function sessionCookieOptions(token: string, maxAge: number) {
   return {

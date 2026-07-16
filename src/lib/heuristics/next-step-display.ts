@@ -1,4 +1,5 @@
 import { formatFutureDate, formatRelativeAge, sourceLabel } from "../format/display";
+import { digestSummaryPreview } from "./email-digest-summary";
 
 export interface NextStepDisplayInput {
   title: string;
@@ -10,14 +11,33 @@ export interface NextStepDisplayInput {
     receivedAt: Date | null;
     authorName: string | null;
     excerpt: string | null;
+    summary?: string | null;
   } | null;
 }
+
+export interface NextStepSummaryDisplay {
+  text: string;
+  label: string;
+  source?: string | null;
+}
+
+export interface NextStepCardDisplay {
+  headline: string;
+  meta: string;
+  summary?: NextStepSummaryDisplay | null;
+}
+
+const GENERIC_REVIEW_TITLE = /^review attached content or proposal$/i;
 
 const GENERIC_TITLE_PATTERNS: Array<{ pattern: RegExp; kind: "mention" | "answer" | "followup" }> = [
   { pattern: /^respond — you were @mentioned$/i, kind: "mention" },
   { pattern: /^answer the question in this email$/i, kind: "answer" },
   { pattern: /^follow up on unanswered thread$/i, kind: "followup" },
 ];
+
+export function isGenericReviewNextStep(title: string): boolean {
+  return GENERIC_REVIEW_TITLE.test(title.trim());
+}
 
 function truncateSubject(subject: string, max = 72): string {
   const trimmed = subject.trim();
@@ -63,6 +83,54 @@ export function formatNextStepHeadline(input: NextStepDisplayInput): string {
   }
 
   return title;
+}
+
+function resolveReviewSummaryText(
+  input: NextStepDisplayInput,
+  dashboardSummary?: NextStepSummaryDisplay | null
+): string | null {
+  const candidates = [
+    dashboardSummary?.text,
+    input.communication?.summary,
+    input.communication?.excerpt,
+    input.communication?.subject,
+  ];
+
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (!trimmed) continue;
+    return trimmed.includes("\n- ")
+      ? digestSummaryPreview(trimmed, 4)
+      : trimmed;
+  }
+
+  return null;
+}
+
+export function formatNextStepCardDisplay(
+  input: NextStepDisplayInput,
+  dashboardSummary?: NextStepSummaryDisplay | null
+): NextStepCardDisplay {
+  if (isGenericReviewNextStep(input.title)) {
+    const summaryText = resolveReviewSummaryText(input, dashboardSummary);
+    if (summaryText) {
+      return {
+        headline: input.communication?.subject?.trim() || "Review needed",
+        meta: formatNextStepMeta(input),
+        summary: {
+          text: summaryText,
+          label: dashboardSummary?.label ?? "Summary",
+          source: dashboardSummary?.source ?? null,
+        },
+      };
+    }
+  }
+
+  return {
+    headline: formatNextStepHeadline(input),
+    meta: formatNextStepMeta(input),
+    summary: null,
+  };
 }
 
 export function formatNextStepMeta(input: NextStepDisplayInput): string {

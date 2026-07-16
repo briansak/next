@@ -72,6 +72,7 @@ describe("analyzeCalendarEvent", () => {
     expect(result.needsPlanning).toBe(false);
     expect(result.tags).toContain("calendar-hold");
     expect(result.priorityScore).toBeLessThanOrEqual(1);
+    expect(result.priority).toBe("INFO");
   });
 
   it("ignores events far in the future", () => {

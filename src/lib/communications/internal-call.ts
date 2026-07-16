@@ -83,6 +83,8 @@ export function internalCallReplayPlatform(metadata: unknown): string | null {
   if (/zoom\.us/i.test(url)) return "zoom";
   if (/stream\.microsoft/i.test(url)) return "stream";
   if (/sharepoint\.com/i.test(url)) return "sharepoint";
+  if (/campaignmgr\.cisco\.com/i.test(url)) return "cisco";
+  if (/vidcast\.io/i.test(url)) return "vidcast";
   if (/youtube\.com|youtu\.be/i.test(url)) return "youtube";
   return null;
 }

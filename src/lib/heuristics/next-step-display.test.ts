@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   applyUserNextStepOrder,
+  formatNextStepCardDisplay,
   formatNextStepHeadline,
   formatNextStepMeta,
+  isGenericReviewNextStep,
 } from "./next-step-display";
 
 const baseCommunication = {
@@ -53,6 +55,50 @@ describe("formatNextStepHeadline", () => {
         },
       })
     ).toBe("Confirm attendee list · Acme QBR");
+  });
+});
+
+describe("isGenericReviewNextStep", () => {
+  it("detects review attachment to-dos", () => {
+    expect(isGenericReviewNextStep("Review attached content or proposal")).toBe(true);
+    expect(isGenericReviewNextStep("Confirm attendee list")).toBe(false);
+  });
+});
+
+describe("formatNextStepCardDisplay", () => {
+  it("replaces generic review titles with communication summary", () => {
+    const card = formatNextStepCardDisplay(
+      {
+        title: "Review attached content or proposal",
+        status: "OPEN",
+        dueAt: null,
+        communication: {
+          ...baseCommunication,
+          source: "EMAIL",
+          subject: "Q2 PSA proposal deck",
+          summary:
+            "Q2 PSA proposal deck\n- Updated pricing for managed services\n- New security attach motion for federal accounts",
+        },
+      },
+      { text: "AI overview of the PSA deck changes.", label: "AI summary", source: "ollama" }
+    );
+
+    expect(card.headline).toBe("Q2 PSA proposal deck");
+    expect(card.summary?.text).toBe("AI overview of the PSA deck changes.");
+    expect(card.summary?.label).toBe("AI summary");
+    expect(card.meta).toContain("Email");
+  });
+
+  it("keeps actionable titles for non-review steps", () => {
+    const card = formatNextStepCardDisplay({
+      title: "Respond — you were @mentioned",
+      status: "OPEN",
+      dueAt: null,
+      communication: baseCommunication,
+    });
+
+    expect(card.headline).toBe('Respond — @mentioned in “AI Defense Oracle Cloud roadmap”');
+    expect(card.summary).toBeNull();
   });
 });
 

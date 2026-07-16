@@ -47,6 +47,26 @@ describe("extractReplayUrl", () => {
     `;
     expect(extractReplayUrl(html)).toContain("sharepoint.com/sites/bridge");
   });
+
+  it("extracts replay URL from anchor text 'here' with nearby replay wording", () => {
+    const html = `
+      <p>You can watch the replay <a href="https://app.vidcast.io/share/abc123">here</a>.</p>
+    `;
+    expect(extractReplayUrl(html)).toBe("https://app.vidcast.io/share/abc123");
+  });
+
+  it("extracts replay URL from click here anchor with recording context", () => {
+    const html = `
+      <p>Missed the session? <a href="https://wwt.webex.com/recordings/xyz">click here</a> to watch the recording.</p>
+    `;
+    expect(extractReplayUrl(html)).toContain("webex.com/recordings");
+  });
+
+  it("extracts replay URL from plain text watch the replay here", () => {
+    const text =
+      "If you missed it, watch the replay here https://app.campaignmgr.cisco.com/e/er?s=123";
+    expect(extractReplayUrl(text)).toContain("campaignmgr.cisco.com");
+  });
 });
 
 describe("extractReplayEmailSummary", () => {
@@ -120,5 +140,37 @@ describe("parseReplayEmail", () => {
     expect(parsed?.summary).toContain("AgenticOps");
     expect(parsed?.summary).toContain("September 23");
     expect(parsed?.summary).not.toContain("Check out the replay on the Bridge");
+  });
+
+  it("parses a Cisco town hall replay from base64 campaign email", () => {
+    const parsed = parseReplayEmail({
+      messageId: "cisco-town-hall-1",
+      subject: "Replay: AI-Era Cyber Defense Town Hall",
+      fromAddress: "noreply@cisco.com",
+      receivedAt: new Date("2026-07-14T18:00:00Z"),
+      body: `SWYgeW91IGhhdmUgdHJvdWJsZSB2aWV3aW5nIHRoaXMgZW1haWwsIHJlYWQgdGhlIG9ubGluZSB2
+ZXJzaW9uLg0KW2h0dHBzOi8vczE4NjUyODMxNzEudC5lbjI1LmNvbS9lL2VzLmFzcHg/cz0xODY1
+MjgzMTcxJmU9NDUyOTQxJmVscT03Y2MyOGJkZDhlNTM0OTZjYmI0NTM1Y2UyMTMyNDZiOV0gICAg
+IA0KDQoNClRoYW5rIHlvdSB0byBldmVyeW9uZSB3aG8gam9pbmVkIE1vbmRheeKAmXMgc3BlY2lh
+bCBlZGl0aW9uIEdsb2JhbCBTYWxlcyBUb3duIEhhbGwuIElmIHlvdSBtaXNzZWQgaXQsIHdhdGNo
+IHRoZSByZXBsYXkgaGVyZSA8aHR0cHM6Ly9hcHAuY2FtcGFpZ25tZ3IuY2lzY28uY29tL2UvZXI/
+cz0xODY1MjgzMTcxJmxpZD0xOTY0NDQmZWxxVHJhY2tJZD1GNjQ0OUNCMjYzNjEyODkzNkJFRjdB
+NzY4OUJDQjNFRCZlbHE9N2NjMjhiZGQ4ZTUzNDk2Y2JiNDUzNWNlMjEzMjQ2YjkmZWxxYWlkPTU1
+OTQwJmVscWF0PTEmZWxxYWs9OEFGNTY3QUNEMUY2QTc3QkJBMTk1RDEwRDM3RjhBNDlCRkUwNUJD
+RkY5RTUxQUIzNUJGNzRFQ0E4NjA3NDc5NENDRUI+LiANCg0KV2UgZm9jdXNlZCBlbnRpcmVseSBv
+biB0aGUgQUktRXJhIEN5YmVyIERlZmVuc2UgY29udmVyc2F0aW9ucyBjdXN0b21lcnMgYW5kIHBh
+cnRuZXJzIGFyZSBoYXZpbmcgcmlnaHQgbm93LCBhbmQgdGhlIHdheXMgd2UgY2FuIGhlbHAgdGhl
+bSBuYXZpZ2F0ZSByaXNrIGFuZCBwcm90ZWN0IHRoZWlyIG9yZ2FuaXphdGlvbnMu`,
+      threadId: null,
+      toAddresses: [],
+      ccAddresses: [],
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.summary).toContain("AI-Era Cyber Defense");
+    expect(parsed?.summary).toContain("customers and partners");
+    expect(parsed?.summary).not.toMatch(/^[A-Za-z0-9+/]{40,}/);
+    expect(parsed?.replayUrl).toContain("campaignmgr.cisco.com");
+    expect(parsed?.replayPlatform).toBe("cisco");
   });
 });

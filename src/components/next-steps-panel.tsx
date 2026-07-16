@@ -2,12 +2,16 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { CardAiSummary } from "@/components/card-ai-summary";
 
 export interface NextStepCardItem {
   id: string;
   headline: string;
   meta: string;
   communicationId: string | null;
+  summaryText?: string | null;
+  summaryLabel?: string | null;
+  summarySource?: string | null;
 }
 
 interface NextStepsPanelProps {
@@ -111,9 +115,32 @@ export function NextStepsPanel({ steps: initialSteps }: NextStepsPanelProps) {
 
           const cardBody = (
             <>
-              <p style={{ fontWeight: 500, fontSize: "0.875rem", lineHeight: 1.45 }}>
-                {step.headline}
-              </p>
+              {step.summaryText ? (
+                <>
+                  {step.headline ? (
+                    <p
+                      style={{
+                        fontSize: "0.8rem",
+                        fontWeight: 600,
+                        marginBottom: "0.35rem",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {step.headline}
+                    </p>
+                  ) : null}
+                  <CardAiSummary
+                    text={step.summaryText}
+                    label={step.summaryLabel}
+                    source={step.summarySource}
+                    maxBullets={4}
+                  />
+                </>
+              ) : (
+                <p style={{ fontWeight: 500, fontSize: "0.875rem", lineHeight: 1.45 }}>
+                  {step.headline}
+                </p>
+              )}
               <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
                 {step.meta}
               </span>

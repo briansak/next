@@ -99,6 +99,11 @@ export function isCalendarHoldTitle(summary: string, description?: string): bool
   return CALENDAR_HOLD_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+/** PTO, OOO, and routine meetings should not surface as actionable priorities. */
+export function isNonPlanningCalendarEvent(tags: string[]): boolean {
+  return tags.includes("calendar-hold") || tags.includes("routine");
+}
+
 export function hasPlanningSignals(text: string): boolean {
   return PLANNING_KEYWORDS.some((pattern) => pattern.test(text));
 }
@@ -362,7 +367,7 @@ export function computePlanningDashboardScore(
     }
   }
 
-  if (input.tags.includes("big-rock")) {
+  if (input.tags.includes("big-rock") || input.tags.includes("rock-event")) {
     score += 1;
     adjustments.push("High-effort event");
   }

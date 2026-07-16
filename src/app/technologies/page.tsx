@@ -4,6 +4,13 @@ import { redirect } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { isTechnologyCommunication } from "@/lib/communications/space-purpose";
+import {
+  isProductAnnouncementCommunication,
+  productAnnouncementLabel,
+  productAnnouncementSummary,
+  productAnnouncementTitle,
+  type ProductAnnouncementMetadata,
+} from "@/lib/communications/product-announcement";
 import { viewerIsMentioned } from "@/lib/heuristics/mentions";
 import { CardAiSummary } from "@/components/card-ai-summary";
 import { DashboardCardLink } from "@/components/dashboard-card-link";
@@ -37,6 +44,17 @@ interface MappedSpace {
 }
 
 const LOOKBACK_DAYS = 14;
+const ANNOUNCEMENT_LOOKBACK_DAYS = 45;
+
+interface ProductAnnouncementEntry {
+  id: string;
+  subject: string | null;
+  receivedAt: Date;
+  metadata: ProductAnnouncementMetadata;
+  summaryText: string;
+  technologyLabel: string;
+  title: string;
+}
 
 export default async function TechnologiesPage() {
   const session = await getAuthSession();
@@ -46,6 +64,9 @@ export default async function TechnologiesPage() {
 
   const tenantWhere = scopedToTenant(session.tenantId);
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+  const announcementSince = new Date(
+    Date.now() - ANNOUNCEMENT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+  );
 
   const webexPolicy = await prisma.ingestionPolicy.findFirst({
     where: { ...tenantWhere, source: "WEBEX" },
@@ -75,6 +96,54 @@ export default async function TechnologiesPage() {
     isTechnologyCommunication(message.metadata)
   );
 
+  const announcementRows = await prisma.communication.findMany({
+    where: {
+      ...tenantWhere,
+      source: "EMAIL",
+      receivedAt: { gte: announcementSince },
+      tags: { has: "product-announcement" },
+    },
+    orderBy: { receivedAt: "desc" },
+    take: 40,
+    select: {
+      id: true,
+      subject: true,
+      receivedAt: true,
+      tags: true,
+      metadata: true,
+      summary: true,
+      excerpt: true,
+    },
+  });
+
+  const productAnnouncements: ProductAnnouncementEntry[] = announcementRows
+    .filter((row) => isProductAnnouncementCommunication(row.tags, row.metadata))
+    .map((row) => {
+      const metadata = (row.metadata ?? {}) as ProductAnnouncementMetadata;
+      return {
+        id: row.id,
+        subject: row.subject,
+        receivedAt: row.receivedAt,
+        metadata,
+        summaryText:
+          productAnnouncementSummary(metadata) ??
+          row.summary ??
+          row.excerpt ??
+          row.subject ??
+          "",
+        technologyLabel: productAnnouncementLabel(metadata),
+        title: productAnnouncementTitle(row.subject, metadata),
+      };
+    })
+    .filter((entry) => entry.summaryText.trim().length > 0);
+
+  const announcementsByLabel = new Map<string, ProductAnnouncementEntry[]>();
+  for (const entry of productAnnouncements) {
+    const bucket = announcementsByLabel.get(entry.technologyLabel) ?? [];
+    bucket.push(entry);
+    announcementsByLabel.set(entry.technologyLabel, bucket);
+  }
+
   const messagesBySpace = new Map<string, typeof technologyMessages>();
   for (const message of technologyMessages) {
     const meta = (message.metadata ?? {}) as CommunicationMetadata;
@@ -102,6 +171,7 @@ export default async function TechnologiesPage() {
         technologyLabel: space.technologyLabel,
         messages: messages.map(toTechnologyMessage),
         cache: space.technologySummaryCache,
+        allowOllama: false,
         persistCache: async (cache) => {
           await prisma.webexSpaceAllowlist.update({
             where: { id: space.id },
@@ -117,6 +187,7 @@ export default async function TechnologiesPage() {
           toTechnologyThreadMessage(message, space.spaceId)
         ),
         cache: space.technologyFaqCache,
+        allowOllama: false,
         persistCache: async (cache) => {
           await prisma.webexSpaceAllowlist.update({
             where: { id: space.id },
@@ -150,12 +221,126 @@ export default async function TechnologiesPage() {
       <header style={{ marginBottom: "2rem" }}>
         <h1 style={{ fontSize: "1.5rem", fontWeight: 600 }}>Technologies</h1>
         <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", marginTop: "0.25rem" }}>
-          Compressed summaries and thread-based FAQs from product, support, and GTM
-          spaces — catch up quickly without reading every message.
+          Product release emails plus compressed summaries and thread-based FAQs from
+          product, support, and GTM spaces — catch up quickly without reading every message.
         </p>
       </header>
 
-      {mappedSpaces.length === 0 ? (
+      {productAnnouncements.length > 0 && (
+        <section style={{ marginBottom: "1.5rem" }}>
+          <Panel title="Product announcements" count={productAnnouncements.length}>
+            <p
+              style={{
+                color: "var(--text-muted)",
+                fontSize: "0.8rem",
+                marginBottom: "1rem",
+                lineHeight: 1.5,
+              }}
+            >
+              Vendor release and launch emails distilled into scannable summaries — last{" "}
+              {ANNOUNCEMENT_LOOKBACK_DAYS} days.
+            </p>
+            {[...announcementsByLabel.entries()].map(([label, entries]) => (
+              <div key={label} style={{ marginBottom: "1rem" }}>
+                <p
+                  style={{
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    color: "var(--medium)",
+                    textTransform: "uppercase",
+                    marginBottom: "0.5rem",
+                  }}
+                >
+                  {label}
+                </p>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.75rem",
+                  }}
+                >
+                  {entries.map((entry) => (
+                    <li
+                      key={entry.id}
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: 10,
+                        padding: "1rem",
+                        background: "var(--bg)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: "0.75rem",
+                          marginBottom: "0.5rem",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <h3 style={{ fontSize: "0.95rem", fontWeight: 600 }}>
+                          {entry.title}
+                          {entry.metadata.productVersion ? (
+                            <span
+                              style={{
+                                marginLeft: "0.5rem",
+                                fontSize: "0.75rem",
+                                color: "var(--text-muted)",
+                                fontWeight: 500,
+                              }}
+                            >
+                              v{entry.metadata.productVersion}
+                            </span>
+                          ) : null}
+                        </h3>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          {formatRelativeAge(entry.receivedAt)}
+                          {entry.metadata.vendor ? ` · ${entry.metadata.vendor}` : ""}
+                        </span>
+                      </div>
+
+                      <CardAiSummary
+                        text={entry.summaryText}
+                        label="Release summary"
+                      />
+
+                      <div
+                        style={{
+                          marginTop: "0.75rem",
+                          display: "flex",
+                          gap: "0.75rem",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                        }}
+                      >
+                        <DashboardCardLink id={entry.id}>
+                          <span style={{ fontSize: "0.8rem", color: "var(--accent)", fontWeight: 500 }}>
+                            View email
+                          </span>
+                        </DashboardCardLink>
+                        {entry.metadata.learnMoreUrl ? (
+                          <a
+                            href={entry.metadata.learnMoreUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: "0.8rem", color: "var(--accent)" }}
+                          >
+                            Learn more
+                          </a>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </Panel>
+        </section>
+      )}
+
+      {mappedSpaces.length === 0 && productAnnouncements.length === 0 ? (
         <section
           style={{
             background: "var(--surface)",
@@ -165,15 +350,15 @@ export default async function TechnologiesPage() {
           }}
         >
           <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", lineHeight: 1.6 }}>
-            No technology spaces mapped yet. In{" "}
+            No technology content yet. Product announcement emails are detected automatically
+            from your connected mailbox. For Webex space summaries, map technology spaces in{" "}
             <Link href="/settings/ingestion" style={{ color: "var(--accent)" }}>
               ingestion settings
             </Link>
-            , connect Webex and map spaces you want summarized for technology and GTM
-            conversations.
+            .
           </p>
         </section>
-      ) : (
+      ) : mappedSpaces.length === 0 ? null : (
         <>
           {directedToYou.length > 0 && (
             <section style={{ marginBottom: "1.5rem" }}>

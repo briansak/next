@@ -3,6 +3,23 @@
  * Falls back to heuristics when Ollama is unavailable.
  */
 
+const OLLAMA_TIMEOUT_MS = 8_000;
+
+async function fetchOllama(
+  url: string,
+  init: RequestInit
+): Promise<Response | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export interface OllamaSummaryRequest {
   body: string;
   subject?: string;
@@ -21,7 +38,7 @@ export async function summarizeMeetingTranscript(
   meetingTitle: string
 ): Promise<OllamaSummaryResponse | null> {
   const baseUrl = process.env.OLLAMA_BASE_URL;
-  const model = process.env.OLLAMA_MODEL ?? "llama3.2";
+  const model = process.env.OLLAMA_MODEL ?? "llama3.1:8b";
 
   if (!baseUrl || !transcript.trim()) {
     return null;
@@ -36,7 +53,7 @@ Transcript:
 ${transcript.slice(0, 12_000)}`;
 
   try {
-    const response = await fetch(`${baseUrl}/api/generate`, {
+    const response = await fetchOllama(`${baseUrl}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -47,7 +64,7 @@ ${transcript.slice(0, 12_000)}`;
       }),
     });
 
-    if (!response.ok) return null;
+    if (!response?.ok) return null;
 
     const data = (await response.json()) as { response: string };
     return JSON.parse(data.response) as OllamaSummaryResponse;
@@ -60,7 +77,7 @@ export async function summarizeWithOllama(
   request: OllamaSummaryRequest
 ): Promise<OllamaSummaryResponse | null> {
   const baseUrl = process.env.OLLAMA_BASE_URL;
-  const model = process.env.OLLAMA_MODEL ?? "llama3.2";
+  const model = process.env.OLLAMA_MODEL ?? "llama3.1:8b";
 
   if (!baseUrl) {
     return null;
@@ -69,7 +86,7 @@ export async function summarizeWithOllama(
   const prompt = buildPrompt(request);
 
   try {
-    const response = await fetch(`${baseUrl}/api/generate`, {
+    const response = await fetchOllama(`${baseUrl}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -80,7 +97,7 @@ export async function summarizeWithOllama(
       }),
     });
 
-    if (!response.ok) {
+    if (!response?.ok) {
       return null;
     }
 

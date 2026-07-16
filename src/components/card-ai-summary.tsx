@@ -3,6 +3,7 @@ import {
   gongSummaryHasStructuredContent,
   type GongSummaryDisplay,
 } from "@/lib/integrations/gong/display";
+import { fixMojibake } from "@/lib/integrations/email/body-text";
 
 interface CardAiSummaryProps {
   text?: string | null;
@@ -69,10 +70,6 @@ function GongSummaryContent({
   );
 }
 
-function isGongSummarySource(source?: string | null, label?: string | null): boolean {
-  return source === "gong" || label === "Gong AI";
-}
-
 export function CardAiSummary({
   text,
   label,
@@ -82,10 +79,11 @@ export function CardAiSummary({
   const trimmed = text?.trim();
   if (!trimmed) return null;
 
-  const isGong = isGongSummarySource(source, label);
-  const gongDisplay = isGong ? formatGongSummaryForDisplay(trimmed) : null;
-  const showStructuredGong =
-    isGong && gongDisplay && gongSummaryHasStructuredContent(gongDisplay);
+  const normalized = fixMojibake(trimmed);
+  const display = formatGongSummaryForDisplay(normalized);
+  const showStructured =
+    gongSummaryHasStructuredContent(display) &&
+    (display.takeaways.length >= 2 || normalized.length > 220);
 
   return (
     <div style={{ marginTop: "0.35rem" }}>
@@ -101,9 +99,9 @@ export function CardAiSummary({
           {label}
         </span>
       ) : null}
-      {showStructuredGong && gongDisplay ? (
+      {showStructured ? (
         <div style={{ marginTop: label ? "0.35rem" : 0 }}>
-          <GongSummaryContent display={gongDisplay} maxBullets={maxBullets} />
+          <GongSummaryContent display={display} maxBullets={maxBullets} />
         </div>
       ) : (
         <p
@@ -114,7 +112,7 @@ export function CardAiSummary({
             marginTop: label ? "0.2rem" : 0,
           }}
         >
-          {trimmed}
+          {normalized}
         </p>
       )}
     </div>

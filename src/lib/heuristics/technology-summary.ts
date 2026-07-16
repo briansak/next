@@ -156,7 +156,7 @@ export async function summarizeTechnologySpaceWithOllama(
   messages: TechnologyMessage[]
 ): Promise<TechnologySpaceSummary | null> {
   const baseUrl = process.env.OLLAMA_BASE_URL?.trim();
-  const model = process.env.OLLAMA_MODEL ?? "llama3.2";
+  const model = process.env.OLLAMA_MODEL ?? "llama3.1:8b";
   if (!baseUrl || messages.length === 0) return null;
 
   const recent = [...messages]
@@ -270,16 +270,20 @@ export async function resolveTechnologySpaceSummary(input: {
   technologyLabel: string | null;
   messages: TechnologyMessage[];
   cache: unknown;
+  allowOllama?: boolean;
   persistCache?: (cache: Prisma.InputJsonValue) => Promise<void>;
 }): Promise<TechnologySpaceSummary> {
   const cached = readSummaryCache(input.cache, input.messages.length);
   if (cached) return cached;
 
-  const ollama = await summarizeTechnologySpaceWithOllama(
-    input.spaceTitle,
-    input.technologyLabel,
-    input.messages
-  );
+  const ollama =
+    input.allowOllama === false
+      ? null
+      : await summarizeTechnologySpaceWithOllama(
+          input.spaceTitle,
+          input.technologyLabel,
+          input.messages
+        );
 
   const summary =
     ollama ??

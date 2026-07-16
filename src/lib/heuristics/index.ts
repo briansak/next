@@ -1,6 +1,11 @@
 import type { Priority } from "@prisma/client";
 import type { EmailAllowlistRule } from "../integrations/email/allowlist";
 import { scoreEmailPartnerPriority } from "../integrations/email/allowlist";
+import { normalizeEmailBodyText } from "../integrations/email/body-text";
+import {
+  digestSummaryPreview,
+  distillEmailDigest,
+} from "./email-digest-summary";
 import {
   detectMentions,
   type MentionUser,
@@ -216,10 +221,17 @@ export function applyViewerMentionBoost(
 }
 
 function buildSummary(input: HeuristicInput, tags: string[]): string {
-  const body = input.body ?? "";
-  const excerpt = body.slice(0, 200).trim();
-  const prefix = input.subject ? `${input.subject}: ` : "";
+  const body = normalizeEmailBodyText(input.body ?? "");
+  const subject = input.subject ?? "";
   const tagNote = tags.length > 0 ? ` [${tags.join(", ")}]` : "";
+
+  const digest = distillEmailDigest(subject, body);
+  if (digest) {
+    return `${digestSummaryPreview(digest)}${tagNote}`;
+  }
+
+  const excerpt = body.slice(0, 200).trim();
+  const prefix = subject ? `${subject}: ` : "";
   return `${prefix}${excerpt}${body.length > 200 ? "…" : ""}${tagNote}`;
 }
 

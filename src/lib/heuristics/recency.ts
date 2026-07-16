@@ -36,6 +36,13 @@ const ACTION_TAGS = [
 
 /** Whether message content still warrants surfacing as an actionable item. */
 export function warrantsAction(tags: string[]): boolean {
+  if (
+    tags.includes("calendar-hold") ||
+    tags.includes("routine") ||
+    tags.includes("travel-logistics")
+  ) {
+    return false;
+  }
   const hasActionSignal = ACTION_TAGS.some((tag) => tags.includes(tag));
   if (!hasActionSignal) return false;
   if (tags.includes("noise") && !tags.includes("mentioned-you")) return false;
@@ -91,6 +98,11 @@ export function computeDashboardScore(
   if (!warrantsAction(input.tags)) {
     score -= NO_ACTION_PENALTY;
     adjustments.push("No clear action needed");
+  }
+
+  if (input.tags.includes("calendar-hold") || input.tags.includes("routine")) {
+    score = 0;
+    adjustments.push("Calendar hold — informational only");
   }
 
   score = Math.max(0, Math.min(10, score));

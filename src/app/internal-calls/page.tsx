@@ -11,10 +11,10 @@ import {
 import { replaySummaryLabel } from "@/lib/integrations/internal-calls/replay-enrich";
 import { internalCallTypeLabel } from "@/lib/integrations/gong/internal-calls";
 import { CardAiSummary } from "@/components/card-ai-summary";
+import { WatchReplayButton } from "@/components/watch-replay-button";
 import { formatRelativeAge } from "@/components/dashboard-ui";
 import { prisma } from "@/lib/db";
 import type { InternalCallType } from "@/lib/integrations/gong/internal-calls";
-import { backfillInternalCallReplays } from "@/lib/integrations/internal-calls/replay-ingest";
 import { scopedToTenant } from "@/lib/tenant";
 
 const LOOKBACK_DAYS = 60;
@@ -78,6 +78,10 @@ function replayPlatformLabel(platform: string | null): string | null {
       return "Microsoft Stream";
     case "sharepoint":
       return "SharePoint";
+    case "cisco":
+      return "Cisco";
+    case "vidcast":
+      return "Vidcast";
     case "youtube":
       return "YouTube";
     case "vimeo":
@@ -100,8 +104,6 @@ export default async function InternalCallsPage() {
   const tenantWhere = scopedToTenant(session.tenantId);
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
   const userEmail = session.email.toLowerCase();
-
-  await backfillInternalCallReplays(session.tenantId).catch(() => null);
 
   const raw = await prisma.communication
     .findMany({
@@ -340,17 +342,36 @@ export default async function InternalCallsPage() {
                           </span>
                         </div>
 
-                        <Link
-                          href={`/dashboard/${call.id}`}
+                        <div
                           style={{
-                            textDecoration: "none",
-                            color: "inherit",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "flex-start",
+                            gap: "0.75rem",
+                            marginTop: "0.35rem",
+                            flexWrap: "wrap",
                           }}
                         >
-                          <p style={{ fontWeight: 600, fontSize: "0.95rem", lineHeight: 1.4 }}>
-                            {call.metadata.gongMeetingTitle ?? call.subject ?? "Internal call"}
-                          </p>
-                        </Link>
+                          <Link
+                            href={`/dashboard/${call.id}`}
+                            style={{
+                              textDecoration: "none",
+                              color: "inherit",
+                              flex: "1 1 220px",
+                              minWidth: 0,
+                            }}
+                          >
+                            <p style={{ fontWeight: 600, fontSize: "0.95rem", lineHeight: 1.4 }}>
+                              {call.metadata.gongMeetingTitle ?? call.subject ?? "Internal call"}
+                            </p>
+                          </Link>
+                          {replayUrl ? (
+                            <WatchReplayButton
+                              url={replayUrl}
+                              platform={replayPlatform}
+                            />
+                          ) : null}
+                        </div>
 
                         {summary ? (
                           <CardAiSummary
@@ -391,30 +412,9 @@ export default async function InternalCallsPage() {
 
                         <div
                           style={{
-                            display: "flex",
-                            gap: "0.75rem",
                             marginTop: "0.65rem",
-                            flexWrap: "wrap",
                           }}
                         >
-                          {replayUrl ? (
-                            <a
-                              href={replayUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{
-                                fontSize: "0.8rem",
-                                color: "#fff",
-                                background: "var(--accent)",
-                                fontWeight: 600,
-                                textDecoration: "none",
-                                padding: "0.35rem 0.75rem",
-                                borderRadius: 6,
-                              }}
-                            >
-                              Watch replay
-                            </a>
-                          ) : null}
                           <Link
                             href={`/dashboard/${call.id}`}
                             style={{
