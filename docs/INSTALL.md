@@ -187,6 +187,8 @@ Use a managed PostgreSQL instance and set `DATABASE_URL` accordingly. Set app pu
 
 | Problem | Fix |
 |---------|-----|
+| `EALLOWSCRIPTS` during `npm ci` / setup | npm 11+ with `allow-scripts` in your user `~/.npmrc` conflicts with project installs. This repo declares `allowScripts` in `package.json` — run `git pull` for the latest. Or remove `allow-scripts=…` from `~/.npmrc`. |
+| Postgres data survives `npm run uninstall` | Homebrew Postgres on port 5432 is in use instead of Docker — stop it (`brew services stop postgresql@16`), then use Docker; see README database section |
 | `Can't reach database server` | Install/start Docker, or run `npm run next` (starts Postgres). Check `DATABASE_URL`. |
 | Stuck on setup / schema errors | `npm run db:reset` then complete `/setup` again |
 | Webex connect button missing | Save Client ID and secret in **Settings → Webex**, then Connect |
