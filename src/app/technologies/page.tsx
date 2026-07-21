@@ -59,7 +59,7 @@ interface ProductAnnouncementEntry {
 export default async function TechnologiesPage() {
   const session = await getAuthSession();
   if (!session) {
-    redirect("/login");
+    redirect("/setup");
   }
 
   const tenantWhere = {};

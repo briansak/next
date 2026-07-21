@@ -105,19 +105,21 @@ Both require the same OAuth token and allowlist checks.
 
 ## Setup checklist
 
+See **[WEBEX_GETTING_STARTED.md](./WEBEX_GETTING_STARTED.md)** for step-by-step OAuth integration setup and keeping refresh tokens alive past the short access-token window.
+
 1. Create Webex integration at [developer.webex.com](https://developer.webex.com)
-2. **Check scopes on the integration** — must match `.env` exactly (see Scope modes below)
-3. Redirect URI: `http://localhost:3000/api/integrations/webex/callback`
-4. Add WWT space IDs to ingestion policy (DRAFT → ACTIVE)
-5. Connect Webex in `/settings/ingestion`
-6. Register webhooks (requires public `NEXT_PUBLIC_APP_URL` — use ngrok for local dev)
-7. Trigger manual sync: `POST /api/integrations/webex/sync`
+2. **Check scopes on the integration** — must match **Settings → Webex** scope preset exactly (see Scope modes below)
+3. Redirect URI: `http://localhost:3000/api/integrations/webex/callback` (save the same value in Settings → Webex)
+4. Add space IDs to ingestion policy (DRAFT → ACTIVE)
+5. Save OAuth credentials and **Connect Webex** in **Settings → Webex**
+6. Register webhooks (requires public app URL in Settings → Webex — use ngrok for local dev)
+7. Trigger manual sync: **Settings → Webex → Sync**
 
 ## Scope modes
 
 Webex returns `invalid_scope` if the app requests scopes not **checked** on your integration.
 
-Set `WEBEX_SCOPE_MODE` in `.env` (or explicit `WEBEX_SCOPES`):
+Set scope preset in **Settings → Webex** (or custom scopes in the same panel):
 
 | Mode | Scopes | When to use |
 |------|--------|-------------|
@@ -127,7 +129,7 @@ Set `WEBEX_SCOPE_MODE` in `.env` (or explicit `WEBEX_SCOPES`):
 | `compliance+webhooks` | compliance + `spark-compliance:webhooks_*` | Push ingestion, org-wide webhooks |
 | `standard+meetings+vidcast` | meetings + `spark:mcp` `Identity:Organization` `Identity:Config` | Vidcast MCP (AI highlights, transcripts) |
 
-On developer.webex.com → your integration → Scopes: check **only** what you configure in `.env`.
+On developer.webex.com → your integration → Scopes: check **only** what you configure in Settings → Webex.
 
 ## Vidcast MCP (Internal Calls — future)
 
@@ -135,8 +137,8 @@ Town halls and enablement sessions hosted on **Vidcast** (`app.vidcast.io`) expo
 
 | Requirement | Who | Notes |
 |-------------|-----|-------|
-| OAuth scopes on integration | You | `spark:mcp`, `Identity:Organization`, `Identity:Config` — use `WEBEX_SCOPE_MODE=standard+meetings+vidcast` |
-| Reconnect Webex after scope change | You | Settings → Ingestion → Reconnect Webex |
+| OAuth scopes on integration | You | `spark:mcp`, `Identity:Organization`, `Identity:Config` — use scope preset `standard+meetings+vidcast` in Settings → Webex |
+| Reconnect Webex after scope change | You | Settings → Webex → Reconnect Webex |
 | **Vidcast MCP enabled in Control Hub** | **Org admin** | Without this, MCP returns: *"You don't have access to this MCP server yet. Ask your administrator to enable it for your account or organization."* |
 
 **Public server:** `https://mcp.webexapis.com/mcp/vidcast`  

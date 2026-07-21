@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogoutButton } from "./logout-button";
 import { SettingsMenu } from "./settings-menu";
 
 const NAV_ITEMS = [
@@ -13,10 +12,10 @@ const NAV_ITEMS = [
 
 interface AppNavProps {
   tenantLabel: string;
-  email: string;
+  displayName: string;
 }
 
-export function AppNav({ tenantLabel, email }: AppNavProps) {
+export function AppNav({ tenantLabel, displayName }: AppNavProps) {
   const pathname = usePathname();
 
   return (
@@ -44,9 +43,8 @@ export function AppNav({ tenantLabel, email }: AppNavProps) {
 
       <div className="app-nav__end">
         <span className="app-nav__meta">{tenantLabel}</span>
-        <span className="app-nav__email">{email}</span>
+        <span className="app-nav__email">{displayName}</span>
         <SettingsMenu />
-        <LogoutButton />
       </div>
     </nav>
   );

@@ -1,9 +1,10 @@
 const ERROR_MESSAGES: Record<string, string> = {
   forbidden: "Only admins can connect integrations.",
-  webex_not_configured: "Webex is not configured. Check WEBEX_CLIENT_ID and WEBEX_CLIENT_SECRET in .env.",
+  webex_not_configured:
+    "Webex is not configured. Save your OAuth client ID and secret under Settings → Webex.",
   webex_auth_denied: "Webex authorization was denied or cancelled.",
   webex_invalid_scope:
-    "Webex rejected the requested scopes. Enable the matching scopes on your integration at developer.webex.com, then set WEBEX_SCOPE_MODE or WEBEX_SCOPES in .env to match exactly.",
+    "Webex rejected the requested scopes. Enable the matching scopes on your integration at developer.webex.com, update the scope preset in Settings → Webex, then reconnect.",
 };
 
 const SUCCESS_MESSAGES: Record<string, string> = {

@@ -11,9 +11,12 @@ datasource db {
 
 model User {
   id                              String   @id @default(cuid())
-  email                           String   @unique
+  email                           String   @unique @default("local@next.local")
   name                            String?
-  passwordHash                    String
+  /// Legacy — local app no longer uses password login.
+  passwordHash                    String?
+  /// False until the first-launch setup questionnaire is finished.
+  onboardingComplete              Boolean  @default(false)
   /// Partner organization this user covers (e.g. "Acme Corp")
   partnerName                     String?
   /// Non-sensitive app settings (Ollama URL, feature toggles, SLA, etc.)
@@ -125,6 +128,17 @@ model IntegrationToken {
   metadata     Json?
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
+}
+
+/// Local app secrets encrypted at rest (OAuth client secrets, webhook keys, etc.)
+model EncryptedSecrets {
+  id                     String   @id @default("local")
+  webexClientIdEnc       String?
+  webexClientSecretEnc   String?
+  webexWebhookSecretEnc  String?
+  ingestionPollSecretEnc String?
+  updatedAt              DateTime @updatedAt
+  createdAt              DateTime @default(now())
 }
 
 // ─── Communications ──────────────────────────────────────────────────────────

@@ -1,18 +1,23 @@
 # Install Next from GitHub
 
-This guide is for anyone cloning [github.com/briansak/next](https://github.com/briansak/next) and running their own instance.
+This guide is for a **fresh install** — cloning [github.com/briansak/next](https://github.com/briansak/next) and running your own instance on a laptop. No manual `.env` editing is required for the standard Docker Postgres setup.
 
 ## Prerequisites
 
 | Requirement | Notes |
 |-------------|--------|
 | **Node.js 20+** | [nodejs.org](https://nodejs.org) |
-| **PostgreSQL 15+** | Or use the included Docker Compose database |
+| **Docker** | Recommended — Next manages local Postgres via Docker Compose |
 | **Git** | To clone and receive updates |
-| **(Optional) Docker** | Easiest way to run Postgres locally |
-| **(Optional) Ollama** | Local AI summaries — configurable in the UI |
+| **(Optional) Ollama** | Local AI summaries — configure in Settings → Preferences |
 
-## 1. Clone the repository
+If you don’t use Docker, you need PostgreSQL 15+ running elsewhere and a custom `DATABASE_URL` in `.env`.
+
+---
+
+## Fresh install (recommended)
+
+### 1. Clone the repository
 
 ```bash
 git clone git@github.com:briansak/next.git
@@ -26,7 +31,7 @@ git clone https://github.com/briansak/next.git
 cd next
 ```
 
-## 2. Run the setup script
+### 2. Run setup
 
 ```bash
 npm run setup
@@ -34,82 +39,138 @@ npm run setup
 
 This will:
 
-1. Copy `.env.example` → `.env` (if `.env` does not exist)
-2. Run `npm ci`
-3. Start Postgres via `docker compose up -d` (when Docker is available)
-4. Run `npm run db:push` and `npm run db:seed`
+1. **Create `.env`** automatically with the default local Postgres URL (if `.env` doesn’t exist)
+2. Run **`npm ci`** — install dependencies
+3. **Start Postgres briefly** via Docker, apply schema (`db:push`), seed policies (`db:seed`)
+4. **Stop Postgres** — it stays off until you run the app
 
-## 3. Configure your environment
+You do **not** need to copy `.env.example` or edit Webex credentials in a file.
 
-Edit `.env` before or after setup. At minimum:
-
-```bash
-# Generate: openssl rand -base64 32
-SESSION_SECRET="your-random-secret"
-
-# Your admin account (created by db:seed)
-SEED_ADMIN_EMAIL="you@example.com"
-SEED_ADMIN_PASSWORD="choose-a-strong-password"
-SEED_ADMIN_NAME="Your Name"
-
-# Partner you cover (optional — defaults in seed)
-SEED_PARTNER_NAME="Acme Corp"
-```
-
-Re-run seed after changing seed values on a **fresh** database:
+### 3. Start the app
 
 ```bash
-npm run db:seed
+npm run next
 ```
 
-Integration secrets (Webex OAuth, etc.) stay in `.env`. Non-sensitive toggles (Ollama URL, auto-poll, SLA) can be changed in **Settings → Preferences → App configuration** after login.
+- Postgres starts on demand (Docker)
+- Your browser opens to [http://localhost:3000](http://localhost:3000)
+- **First launch:** complete the setup questionnaire at `/setup`
+- **After setup:** you go straight to **My Priorities** (`/dashboard`)
 
-See [.env.example](../.env.example) for the full list.
+Quit with `Ctrl+C`. Postgres stops, but your data persists in the Docker volume for the next run.
 
-## 4. Start the app
+---
+
+## First-launch setup questionnaire
+
+The wizard asks for:
+
+1. **Your name** and **partner organization**
+2. **Email rules** (domains, subject prefixes) — optional
+3. **Preferences** — Ollama, auto-poll, Apple import toggles
+4. **Webex** — optional; connect after saving OAuth credentials in Settings
+
+No login or registration. Everything can be changed later in **Settings**.
+
+---
+
+## Configure in Settings (not `.env`)
+
+| What | Where |
+|------|--------|
+| Webex Client ID, secret, scopes, redirect URI | **Settings → Webex** (encrypted on disk) |
+| Ollama URL and model | **Settings → Preferences → App configuration** |
+| Auto-poll, Gong correlation, partner SLA | **Settings → Preferences → App configuration** |
+| Apple Mail / Calendar import | **Settings → Email** |
+| PST import, Whisper transcription, poll secret | **Settings → Preferences → Advanced integrations** |
+
+Webex walkthrough: [WEBEX_GETTING_STARTED.md](./WEBEX_GETTING_STARTED.md)
+
+Apple Mail/Calendar: [APPLE_MAIL_CALENDAR_GETTING_STARTED.md](./APPLE_MAIL_CALENDAR_GETTING_STARTED.md)
+
+---
+
+## Local database lifecycle
+
+Postgres runs **only while the app or a db command needs it**. Your data **persists** between runs in Docker volume `next_pgdata`.
+
+| Action | Command | Postgres | Data |
+|--------|---------|----------|------|
+| Daily dev | `npm run next` | Starts on launch, stops on quit | Kept |
+| First install | `npm run setup` | Starts briefly, then stops | Created |
+| Schema update | `npm run db:push` | Starts for command | Kept |
+| Wipe app data | `npm run db:reset` | Starts for command | Tables wiped, volume kept |
+| Full remove | `npm run uninstall` | Container + volume removed | **All DB data gone** |
+
+Set `NEXT_MANAGE_POSTGRES=false` in `.env` if you use your own Postgres server (Next won’t start/stop Docker).
+
+---
+
+## Uninstall or start over
+
+### Remove all local app data (keep source code)
 
 ```bash
-npm run dev
+npm run uninstall
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+This removes:
 
-**Sign in:**
+- Docker Postgres container and **database volume** (all communications, settings, Webex tokens)
+- `.local/` encryption key (Webex client secret storage)
 
-- Use `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` from `.env` (when seed created the account), or
-- On a fresh install with no seed admin, use `/register` once to create your local account.
+It keeps the project folder and `.env`. To reinstall:
 
-This app supports **one account per install**. Registration is disabled after the first user exists.
+```bash
+npm run setup
+npm run next
+```
 
-## Upgrading from an older multi-tenant database
+Complete `/setup` again as a new user.
 
-The schema changed significantly. On your laptop, reset the local database:
+### Remove the app entirely
+
+After `npm run uninstall`, delete the project folder.
+
+### Wipe data but keep Docker volume
 
 ```bash
 npm run db:reset
 ```
 
-Then sign in with the seeded admin from `.env`.
+Then open `/setup` and complete the questionnaire again.
 
-## 5. Configure your instance
+---
 
-After login:
+## `.env` — what’s actually in it?
 
-1. **Settings → Email** — partner domains, subject prefixes, email import
-2. **Settings → Webex** — connect Webex and allowlist spaces
-3. **Settings → Preferences** — Ollama, auto-poll, Gong correlation, SLA
+On first run, Next auto-creates:
 
-## Manual setup (without the script)
+```env
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/next?schema=public"
+```
+
+That matches [docker-compose.yml](../docker-compose.yml). **Edit only if** Postgres runs on a different host, port, or database name.
+
+Optional overrides are listed in [.env.example](../.env.example) (legacy fallbacks only — Settings is preferred).
+
+Encryption key for stored secrets: auto-created at `.local/encryption.key` (or set `APP_ENCRYPTION_KEY`).
+
+---
+
+## Manual setup (without `npm run setup`)
 
 ```bash
-cp .env.example .env
-# edit .env
-docker compose up -d   # optional
 npm ci
+node scripts/ensure-env.mjs          # create .env if missing
+node scripts/postgres-docker.mjs ensure
 npm run db:push
 npm run db:seed
-npm run dev
+node scripts/postgres-docker.mjs stop
+npm run next
 ```
+
+---
 
 ## Production (optional)
 
@@ -118,23 +179,28 @@ npm run build
 npm run start
 ```
 
-Set `NEXT_PUBLIC_APP_URL` to your public URL. Use a managed PostgreSQL instance and a strong `SESSION_SECRET`.
+Use a managed PostgreSQL instance and set `DATABASE_URL` accordingly. Set app public URL in **Settings → Webex** (or legacy `NEXT_PUBLIC_APP_URL` in `.env`).
+
+---
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| `Can't reach database server` | Start Postgres: `docker compose up -d` or fix `DATABASE_URL` |
-| Registration blocked | One account per install — sign in instead |
-| Webex connect fails | Set `WEBEX_CLIENT_ID`, `WEBEX_CLIENT_SECRET`, `WEBEX_REDIRECT_URI` in `.env` |
-| Apple Mail import empty | Grant Full Disk Access to your terminal/IDE; see Settings → Email |
+| `Can't reach database server` | Install/start Docker, or run `npm run next` (starts Postgres). Check `DATABASE_URL`. |
+| Stuck on setup / schema errors | `npm run db:reset` then complete `/setup` again |
+| Webex connect button missing | Save Client ID and secret in **Settings → Webex**, then Connect |
+| `redirect_uri_mismatch` | Redirect URI in developer.webex.com must match **Settings → Webex** exactly |
+| Webex stops after ~12 hours | Use OAuth integration (not personal token); enable auto-poll; see [WEBEX_GETTING_STARTED.md](./WEBEX_GETTING_STARTED.md) |
+| Apple Mail import empty | Grant Full Disk Access to Terminal/Cursor; enable toggles in **Settings → Email** — see [APPLE_MAIL_CALENDAR_GETTING_STARTED.md](./APPLE_MAIL_CALENDAR_GETTING_STARTED.md) |
+| Want a completely clean slate | `npm run uninstall` then `npm run setup` |
+
+---
 
 ## Getting updates
-
-When the maintainer publishes changes to GitHub:
 
 ```bash
 npm run update
 ```
 
-See [UPDATING.md](./UPDATING.md) for details, forks, and merge conflicts.
+See [UPDATING.md](./UPDATING.md) for forks, merge conflicts, and rollbacks.

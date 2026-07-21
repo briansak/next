@@ -21,6 +21,9 @@ describe("resolveAppConfig", () => {
       enableMeetingOllamaSummary: true,
       partnerAskSlaHours: 24,
       ingestionPollIntervalMs: 120_000,
+      enableAppleMailImport: true,
+      enableAppleCalendarImport: false,
+      appleCalendarNames: "Calendar, Work",
     });
 
     expect(resolved.ollamaBaseUrl).toBe("http://127.0.0.1:11434");
@@ -30,6 +33,9 @@ describe("resolveAppConfig", () => {
     expect(resolved.enableMeetingOllamaSummary).toBe(true);
     expect(resolved.partnerAskSlaHours).toBe(24);
     expect(resolved.ingestionPollIntervalMs).toBe(120_000);
+    expect(resolved.enableAppleMailImport).toBe(true);
+    expect(resolved.enableAppleCalendarImport).toBe(false);
+    expect(resolved.appleCalendarNames).toBe("Calendar, Work");
   });
 
   it("normalizes blank Ollama URL to null", () => {

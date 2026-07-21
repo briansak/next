@@ -6,6 +6,8 @@ import { promisify } from "util";
 import { emlxToEml } from "./emlx";
 import { splitMbox } from "./mbox";
 import { parseIcs } from "./ics";
+import { getImportAppConfig } from "@/lib/config/app-config-store";
+import type { ResolvedAppConfig } from "@/lib/config/app-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,16 +25,23 @@ export function archiveImportEnabled(): boolean {
   return true;
 }
 
-export function pstExtractionEnabled(): boolean {
-  return process.env.ENABLE_PST_IMPORT === "true";
+export async function pstExtractionEnabled(): Promise<boolean> {
+  const config = await getImportAppConfig();
+  return pstExtractionEnabledFromConfig(config);
 }
 
-function resolveUnzipBin(): string {
-  return process.env.UNZIP_BIN?.trim() || "unzip";
+export function pstExtractionEnabledFromConfig(config: ResolvedAppConfig): boolean {
+  return config.enablePstImport;
 }
 
-function resolveReadpstBin(): string {
-  return process.env.READPST_BIN?.trim() || "readpst";
+async function resolveUnzipBin(): Promise<string> {
+  const config = await getImportAppConfig();
+  return config.unzipBin;
+}
+
+async function resolveReadpstBin(): Promise<string> {
+  const config = await getImportAppConfig();
+  return config.readpstBin;
 }
 
 export function validateArchiveSize(bytes: number): boolean {
@@ -91,7 +100,7 @@ async function extractZip(
 ): Promise<ExtractedArchive> {
   const outDir = join(workDir, "extracted");
   await execFileAsync(
-    resolveUnzipBin(),
+    await resolveUnzipBin(),
     ["-q", "-o", zipPath, "-d", outDir],
     { timeout: EXTRACT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }
   );
@@ -102,15 +111,15 @@ async function extractPst(
   pstPath: string,
   workDir: string
 ): Promise<ExtractedArchive> {
-  if (!pstExtractionEnabled()) {
+  if (!(await pstExtractionEnabled())) {
     throw new Error(
-      "PST import requires readpst. Install libpst (e.g. brew install libpst), set ENABLE_PST_IMPORT=true and READPST_BIN=readpst"
+      "PST import requires readpst. Install libpst (e.g. brew install libpst) and enable PST import in Settings → Preferences."
     );
   }
 
   const outDir = join(workDir, "pst-out");
   await execFileAsync(
-    resolveReadpstBin(),
+    await resolveReadpstBin(),
     ["-S", "-e", "-o", outDir, pstPath],
     { timeout: EXTRACT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }
   );

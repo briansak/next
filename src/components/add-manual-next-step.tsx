@@ -127,7 +127,7 @@ export function AddManualNextStep() {
               lineHeight: 1.5,
             }}
           >
-            Paste email text, a CFP notice, or any notes — we&apos;ll extract a
+            Paste email text, a deadline, or any notes — we&apos;ll extract a
             title, summary, priority, and due date.
           </p>
           <textarea
@@ -137,7 +137,7 @@ export function AddManualNextStep() {
               setPreview(null);
               setError(null);
             }}
-            placeholder={`Example:\nCFP for Cisco Live 2026 — Security track\nSubmit 400-word abstract and speaker bio.\nSubmission deadline August 4th.`}
+            placeholder={`Example:\nReview Q3 partner roadmap deck\nSend feedback by Friday EOD.\nFollow up with Alex if blocked.`}
             rows={6}
             style={{
               width: "100%",

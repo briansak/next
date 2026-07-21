@@ -6,6 +6,7 @@ import {
   ingestWebexMessage,
   isAllowlistedSpace,
 } from "@/lib/integrations/webex/ingest";
+import { getWebexWebhookSecret } from "@/lib/integrations/webex/config-store";
 import type { WebexWebhookPayload } from "@/lib/integrations/webex";
 
 function verifyWebhookSignature(
@@ -29,7 +30,7 @@ function verifyWebhookSignature(
 export async function POST(request: Request) {
   const rawBody = await request.text();
   const signature = request.headers.get("x-spark-signature");
-  const secret = process.env.WEBEX_WEBHOOK_SECRET;
+  const secret = await getWebexWebhookSecret();
 
   if (secret && !verifyWebhookSignature(rawBody, signature, secret)) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });

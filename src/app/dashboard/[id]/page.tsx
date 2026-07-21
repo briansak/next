@@ -89,7 +89,7 @@ export default async function CommunicationDetailPage({
   const { id } = await params;
   const session = await getAuthSession();
   if (!session) {
-    redirect("/login");
+    redirect("/setup");
   }
 
   const communication = await prisma.communication.findFirst({

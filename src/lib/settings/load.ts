@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getWebexConfig } from "@/lib/integrations/webex";
+import { getWebexConfig } from "@/lib/integrations/webex/config-store";
 
 export async function loadSettingsData(userId: string) {
   const policies = await prisma.ingestionPolicy
@@ -28,10 +28,12 @@ export async function loadSettingsData(userId: string) {
     })
     .catch(() => null);
 
+  const webexConfigured = await getWebexConfig();
+
   return {
     policies,
     webexConnected,
-    webexConfig: getWebexConfig(),
+    webexConfig: webexConfigured,
     webexPolicy,
     emailPolicy,
     partnerName: user?.partnerName ?? null,

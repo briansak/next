@@ -136,7 +136,7 @@ function replayPlatformLabel(platform: string | null): string | null {
 export default async function InternalCallsPage() {
   const session = await getAuthSession();
   if (!session) {
-    redirect("/login");
+    redirect("/setup");
   }
 
   const tenantWhere = {};

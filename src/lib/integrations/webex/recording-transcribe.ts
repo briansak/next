@@ -3,17 +3,23 @@ import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { promisify } from "util";
+import { getImportAppConfig } from "@/lib/config/app-config-store";
+import type { ResolvedAppConfig } from "@/lib/config/app-config";
 
 const execFileAsync = promisify(execFile);
 
 const MAX_AUDIO_BYTES = 80 * 1024 * 1024;
 const TRANSCRIBE_TIMEOUT_MS = 180_000;
 
-export function recordingTranscriptionEnabled(): boolean {
-  return (
-    process.env.ENABLE_RECORDING_TRANSCRIPTION === "true" &&
-    Boolean(process.env.WHISPER_BIN?.trim())
-  );
+export async function recordingTranscriptionEnabled(): Promise<boolean> {
+  const config = await getImportAppConfig();
+  return recordingTranscriptionEnabledFromConfig(config);
+}
+
+export function recordingTranscriptionEnabledFromConfig(
+  config: ResolvedAppConfig
+): boolean {
+  return config.enableRecordingTranscription && Boolean(config.whisperBin?.trim());
 }
 
 export async function downloadRecordingAudio(url: string): Promise<Buffer | null> {
@@ -37,10 +43,11 @@ export async function transcribeWithWhisperCli(
   audio: Buffer,
   extension = "mp4"
 ): Promise<string | null> {
-  const whisperBin = process.env.WHISPER_BIN?.trim();
+  const config = await getImportAppConfig();
+  const whisperBin = config.whisperBin?.trim();
   if (!whisperBin) return null;
 
-  const model = process.env.WHISPER_MODEL?.trim() || "tiny";
+  const model = config.whisperModel?.trim() || "tiny";
   const workDir = await mkdtemp(join(tmpdir(), "next-meeting-"));
   const inputPath = join(workDir, `recording.${extension}`);
   const outputBase = join(workDir, "recording");

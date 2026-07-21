@@ -623,3 +623,271 @@ button {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+.setup-shell {
+  min-height: calc(100vh - 4rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+}
+
+.setup-card {
+  width: min(720px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.setup-header {
+  margin-bottom: 1.5rem;
+}
+
+.setup-kicker {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+.setup-header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.setup-lead {
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 1rem;
+}
+
+.setup-progress {
+  height: 4px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.setup-progress__bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.setup-steps__item {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.setup-steps__item--active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.setup-steps__item--done {
+  color: var(--text);
+}
+
+.setup-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.setup-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.setup-input {
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.setup-hint {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.setup-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.setup-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.setup-guide-links {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.setup-link {
+  color: var(--accent);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.setup-webex-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.setup-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.setup-button {
+  padding: 0.55rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.setup-button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.setup-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.setup-error {
+  color: #b42318;
+  background: color-mix(in srgb, #b42318 8%, transparent);
+  border: 1px solid color-mix(in srgb, #b42318 25%, transparent);
+  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+.setup-success {
+  color: #067647;
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.doc-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+.doc-page h1 {
+  font-size: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.doc-page h2 {
+  font-size: 1.125rem;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.doc-page p,
+.doc-page li {
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.doc-page p {
+  margin-bottom: 0.75rem;
+}
+
+.doc-page ul {
+  padding-left: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.doc-page code {
+  font-size: 0.85em;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+}
+
+.doc-page pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 0.75rem 0 1rem;
+}
+
+.doc-page pre code {
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.doc-page table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.875rem;
+}
+
+.doc-page th,
+.doc-page td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.65rem;
+  text-align: left;
+}
+
+.doc-back {
+  display: inline-block;
+  margin-bottom: 1.5rem;
+  color: var(--accent);
+  font-size: 0.875rem;
+}

@@ -11,7 +11,11 @@
 
 const PUBLIC_VIDCAST_MCP_URL = "https://mcp.webexapis.com/mcp/vidcast";
 
-export function getVidcastMcpUrl(): string {
+export async function getVidcastMcpUrl(): Promise<string> {
+  const { getWebexMcpUrl } = await import("./config-store");
+  const configured = await getWebexMcpUrl();
+  if (configured) return configured;
+
   const explicit = process.env.WEBEX_MCP_URL?.trim();
   if (explicit) return explicit;
 
@@ -22,6 +26,13 @@ export function getVidcastMcpUrl(): string {
     return `${base}${normalizedPath}`;
   }
 
+  return PUBLIC_VIDCAST_MCP_URL;
+}
+
+/** @deprecated Use getVidcastMcpUrl() async for runtime resolution. */
+export function getVidcastMcpUrlFromEnv(): string {
+  const explicit = process.env.WEBEX_MCP_URL?.trim();
+  if (explicit) return explicit;
   return PUBLIC_VIDCAST_MCP_URL;
 }
 
@@ -80,7 +91,12 @@ export class VidcastMcpClient {
     private readonly accessToken: string,
     options?: { mcpUrl?: string }
   ) {
-    this.mcpUrl = options?.mcpUrl ?? getVidcastMcpUrl();
+    this.mcpUrl = options?.mcpUrl ?? PUBLIC_VIDCAST_MCP_URL;
+  }
+
+  static async create(accessToken: string): Promise<VidcastMcpClient> {
+    const mcpUrl = await getVidcastMcpUrl();
+    return new VidcastMcpClient(accessToken, { mcpUrl });
   }
 
   async initialize(): Promise<void> {

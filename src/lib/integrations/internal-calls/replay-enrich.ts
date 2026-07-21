@@ -210,7 +210,7 @@ async function tryTranscriptSummary(
   content: ReplayEmailContent,
   runtime?: ReturnType<typeof ollamaRuntimeFromConfig>
 ): Promise<EnrichedReplaySummary | null> {
-  if (!recordingTranscriptionEnabled() || !content.replayUrl) return null;
+  if (!(await recordingTranscriptionEnabled()) || !content.replayUrl) return null;
   if (!isDirectMediaReplayUrl(content.replayUrl)) return null;
 
   const audio = await downloadRecordingAudio(content.replayUrl);

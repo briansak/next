@@ -27,7 +27,7 @@ async function main() {
   console.log(`  Users removed:    ${users.count}`);
   console.log("");
   console.log("Ingestion policies and integration tokens were kept.");
-  console.log("Register at /register to create your account.");
+  console.log("Open /setup to complete the first-launch questionnaire.");
 }
 
 main()

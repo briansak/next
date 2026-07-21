@@ -102,19 +102,14 @@ Output: `priority` (1–5), `suggestedAction`, `extractedDeadline`, `tags[]`.
 
 ### Email (file import and Apple Mail)
 
-- Import `.eml`, `.zip`, `.pst`, `.mbox`, and `.ics` from Settings → Ingestion
-- Optional Apple Mail / Apple Calendar sync on Mac (`ENABLE_APPLE_MAIL_IMPORT`, `ENABLE_APPLE_CALENDAR_IMPORT`)
-- Filter by `EmailAllowlist` (from address, domain, subject prefix) for partner priority boosts
+- Import `.eml`, `.zip`, `.pst`, `.mbox`, and `.ics` from Settings → Email
+- Optional Apple Mail / Apple Calendar sync on Mac — see [APPLE_MAIL_CALENDAR_GETTING_STARTED.md](./APPLE_MAIL_CALENDAR_GETTING_STARTED.md)
+- Filter by partner email rules for priority boosts
 - Normalize to `Communication` with `source: EMAIL`, `messageId`, `subject`, `body`, `timestamp`
 
 ## Initial setup (seed)
 
-Run `npm run setup` (or `npm run db:seed`) after install. Customize via `.env`:
-
-- `SEED_PARTNER_NAME` — default partner org label (e.g. WWT)
-- `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`
-
-The seed creates one local user, default partner email rules (`@wwt.com`, `[WWT]`), and a DRAFT Webex policy. Configure spaces and rules in Settings.
+Run `npm run setup` (or `npm run db:seed`) after install. Seed creates ingestion policies only — your profile is created during first-launch setup at `/setup`.
 
 Install and update guides: [INSTALL.md](./INSTALL.md), [UPDATING.md](./UPDATING.md).
 

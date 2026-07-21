@@ -91,7 +91,7 @@ export interface WebexWebhookPayload {
   };
 }
 
-export function getWebexConfig(): WebexConfig | null {
+export function getWebexConfigFromEnv(): WebexConfig | null {
   const clientId = process.env.WEBEX_CLIENT_ID;
   const clientSecret = process.env.WEBEX_CLIENT_SECRET;
   const redirectUri = process.env.WEBEX_REDIRECT_URI;
@@ -101,6 +101,11 @@ export function getWebexConfig(): WebexConfig | null {
   }
 
   return { clientId, clientSecret, redirectUri };
+}
+
+/** @deprecated Use getWebexConfig() from config-store for runtime resolution. */
+export function getWebexConfig(): WebexConfig | null {
+  return getWebexConfigFromEnv();
 }
 
 // Scopes must be checked on your integration at developer.webex.com.
@@ -151,35 +156,73 @@ export const WEBEX_SCOPE_PRESETS = {
 
 export type WebexScopeMode = keyof typeof WEBEX_SCOPE_PRESETS;
 
-export function getWebexScopes(): string {
+function scopesFromMode(mode: string): string {
+  if (mode === "custom") {
+    return WEBEX_SCOPE_PRESETS.standard.join(" ");
+  }
+  const preset = WEBEX_SCOPE_PRESETS[mode as WebexScopeMode];
+  return preset ? preset.join(" ") : WEBEX_SCOPE_PRESETS.standard.join(" ");
+}
+
+export function getWebexScopesFromEnv(): string {
   const explicit = process.env.WEBEX_SCOPES?.trim();
   if (explicit) return explicit;
 
   const mode = (process.env.WEBEX_SCOPE_MODE ?? "standard") as WebexScopeMode;
-  const preset = WEBEX_SCOPE_PRESETS[mode];
-  if (preset) return preset.join(" ");
-
-  return WEBEX_SCOPE_PRESETS.standard.join(" ");
+  return scopesFromMode(mode);
 }
 
-export function getWebexScopeMode(): string {
+export function getWebexScopeModeFromEnv(): string {
   if (process.env.WEBEX_SCOPES?.trim()) return "custom";
   return process.env.WEBEX_SCOPE_MODE ?? "standard";
 }
 
-export function getWebexOAuthUrl(config: WebexConfig, state: string): string {
+export function getWebexScopesFromConfig(config: {
+  webexCustomScopes: string | null;
+  webexScopeMode: string;
+}): string {
+  if (config.webexCustomScopes?.trim()) {
+    return config.webexCustomScopes.trim();
+  }
+  return scopesFromMode(config.webexScopeMode);
+}
+
+export function getWebexScopeModeFromConfig(config: {
+  webexCustomScopes: string | null;
+  webexScopeMode: string;
+}): string {
+  if (config.webexCustomScopes?.trim()) return "custom";
+  return config.webexScopeMode;
+}
+
+/** @deprecated Use getWebexScopes() from config-store for runtime resolution. */
+export function getWebexScopes(): string {
+  return getWebexScopesFromEnv();
+}
+
+/** @deprecated Use getWebexScopeMode() from config-store for runtime resolution. */
+export function getWebexScopeMode(): string {
+  return getWebexScopeModeFromEnv();
+}
+
+export function getWebexOAuthUrl(
+  config: WebexConfig,
+  state: string,
+  scopes: string
+): string {
   const url = new URL(`${WEBEX_API}/authorize`);
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", config.redirectUri);
-  url.searchParams.set("scope", getWebexScopes());
+  url.searchParams.set("scope", scopes);
   url.searchParams.set("state", state);
   return url.toString();
 }
 
 export async function exchangeWebexCode(
   config: WebexConfig,
-  code: string
+  code: string,
+  scopes: string
 ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
   const response = await fetch(`${WEBEX_API}/access_token`, {
     method: "POST",
@@ -190,7 +233,7 @@ export async function exchangeWebexCode(
       client_secret: config.clientSecret,
       code,
       redirect_uri: config.redirectUri,
-      scope: getWebexScopes(),
+      scope: scopes,
     }),
   });
 

@@ -142,7 +142,7 @@ async function resolveTranscriptText(
     }
   }
 
-  if (matchedRecording && recordingTranscriptionEnabled()) {
+  if (matchedRecording && (await recordingTranscriptionEnabled())) {
     const audioUrl = recordingDownloadUrl(recordingDetail ?? matchedRecording);
     if (audioUrl) {
       const audio = await downloadRecordingAudio(audioUrl);

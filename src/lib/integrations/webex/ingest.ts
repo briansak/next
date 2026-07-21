@@ -8,14 +8,18 @@ import type { SpacePurpose } from "@/lib/communications/space-purpose";
 import {
   createMessageWebhook,
   fetchAllowlistedMessages,
-  getWebexConfig,
   refreshWebexToken,
   type WebexMessage,
   type WebexSpaceAllowlistEntry,
 } from "./index";
+import {
+  getAppPublicUrl,
+  getWebexConfig,
+  getWebexWebhookSecret,
+} from "./config-store";
 
 export async function getWebexAccessToken(): Promise<string | null> {
-  const config = getWebexConfig();
+  const config = await getWebexConfig();
   if (!config) return null;
 
   const token = await prisma.integrationToken.findUnique({
@@ -249,13 +253,13 @@ export async function registerWebexWebhooks(): Promise<string[]> {
     throw new Error("Webex not connected");
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  const appUrl = await getAppPublicUrl();
   if (!appUrl) {
-    throw new Error("NEXT_PUBLIC_APP_URL required for webhook registration");
+    throw new Error("App public URL required for webhook registration");
   }
 
   const targetUrl = `${appUrl}/api/integrations/webex/webhook`;
-  const secret = process.env.WEBEX_WEBHOOK_SECRET;
+  const secret = (await getWebexWebhookSecret()) ?? undefined;
   const webhookIds: string[] = [];
 
   for (const entry of allowlist) {

@@ -27,14 +27,11 @@ import {
   validateEmlSize,
 } from "@/lib/integrations/email/eml";
 import {
-  appleCalendarImportEnabled,
   fetchAppleCalendarEvents,
   rawEventToCalendarEvent,
 } from "@/lib/integrations/email/apple-calendar";
-import {
-  appleMailImportEnabled,
-  scanAppleMailMessages,
-} from "@/lib/integrations/email/apple-mail";
+import { scanAppleMailMessages } from "@/lib/integrations/email/apple-mail";
+import { getImportAppConfig } from "@/lib/config/app-config-store";
 import {
   calendarEventId,
   type CalendarEvent,
@@ -677,7 +674,8 @@ export interface AppleMailImportResult {
 
 /** Read local Apple Mail cache (~/Library/Mail) and import allowlisted messages. */
 export async function importFromAppleMail(): Promise<AppleMailImportResult> {
-  if (!appleMailImportEnabled()) {
+  const importConfig = await getImportAppConfig();
+  if (!importConfig.enableAppleMailImport) {
     return {
       scanned: 0,
       candidates: 0,
@@ -687,7 +685,7 @@ export async function importFromAppleMail(): Promise<AppleMailImportResult> {
       root: "",
       warnings: [],
       errors: [
-        "Apple Mail import is disabled. Set ENABLE_APPLE_MAIL_IMPORT=true in .env and restart the dev server.",
+        "Apple Mail import is disabled. Enable it in Settings → Email → Apple Mail & Calendar.",
       ],
     };
   }
@@ -806,7 +804,8 @@ export interface AppleCalendarImportResult {
 
 /** Read events from Apple Calendar.app via EventKit and import allowlisted items. */
 export async function importFromAppleCalendar(): Promise<AppleCalendarImportResult> {
-  if (!appleCalendarImportEnabled()) {
+  const importConfig = await getImportAppConfig();
+  if (!importConfig.enableAppleCalendarImport) {
     return {
       calendars: [],
       candidates: 0,
@@ -815,7 +814,7 @@ export async function importFromAppleCalendar(): Promise<AppleCalendarImportResu
       rejected: 0,
       warnings: [],
       errors: [
-        "Apple Calendar import is disabled. Set ENABLE_APPLE_CALENDAR_IMPORT=true in .env and restart the dev server.",
+        "Apple Calendar import is disabled. Enable it in Settings → Email → Apple Mail & Calendar.",
       ],
     };
   }
@@ -836,7 +835,9 @@ export async function importFromAppleCalendar(): Promise<AppleCalendarImportResu
 
   let scan;
   try {
-    scan = await fetchAppleCalendarEvents();
+    scan = await fetchAppleCalendarEvents({
+      calendarNames: importConfig.appleCalendarNames,
+    });
   } catch (err) {
     return {
       calendars: [],

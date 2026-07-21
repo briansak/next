@@ -75,7 +75,7 @@ export function OllamaPreferenceToggle({
           >
             {available
               ? "When enabled, My Priorities may call your configured Ollama instance for richer card summaries. Data stays on your machine."
-              : "Set an Ollama base URL in App configuration (or OLLAMA_BASE_URL in .env) and ensure Ollama is running to enable this option."}
+              : "Set an Ollama base URL in Settings → Preferences and ensure Ollama is running to enable this option."}
           </span>
         </span>
       </label>

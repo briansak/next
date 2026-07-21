@@ -9,7 +9,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
       {session ? (
         <AppNav
           tenantLabel={session.partnerName ?? "Local"}
-          email={session.email}
+          displayName={session.name ?? "You"}
         />
       ) : null}
       {children}

@@ -8,6 +8,8 @@ import {
   envelopeIndexPreferred,
   scanAppleMailViaEnvelopeIndex,
 } from "./apple-mail-envelope";
+import { getImportAppConfig } from "@/lib/config/app-config-store";
+import type { ResolvedAppConfig } from "@/lib/config/app-config";
 
 const MAX_APPLE_MAIL_MESSAGES = 2000;
 const DEFAULT_LOOKBACK_DAYS = 14;
@@ -27,11 +29,35 @@ export interface AppleMailScanResult {
   diagnostics?: string[];
 }
 
+export async function isAppleMailImportEnabled(): Promise<boolean> {
+  const config = await getImportAppConfig();
+  return config.enableAppleMailImport;
+}
+
+export function appleMailImportEnabledFromConfig(config: ResolvedAppConfig): boolean {
+  return config.enableAppleMailImport;
+}
+
+/** Env-only fallback for legacy scripts; prefer isAppleMailImportEnabled(). */
 export function appleMailImportEnabled(): boolean {
   return process.env.ENABLE_APPLE_MAIL_IMPORT === "true";
 }
 
-export function resolveAppleMailRoot(): string {
+export async function resolveAppleMailRoot(): Promise<string> {
+  const config = await getImportAppConfig();
+  return resolveAppleMailRootFromConfig(config);
+}
+
+export function resolveAppleMailRootFromConfig(config: ResolvedAppConfig): string {
+  const configured = config.appleMailPath?.trim();
+  if (configured) {
+    return expandHome(configured);
+  }
+  return join(homedir(), "Library", "Mail");
+}
+
+/** Env-only fallback for legacy scripts. */
+export function resolveAppleMailRootFromEnv(): string {
   const configured = process.env.APPLE_MAIL_PATH?.trim();
   if (configured) {
     return expandHome(configured);
@@ -74,14 +100,14 @@ export async function pathExists(path: string): Promise<boolean> {
 export async function scanAppleMailMessages(
   options?: { root?: string; lookbackDays?: number }
 ): Promise<AppleMailScanResult> {
-  const mailRoot = resolveAppleMailRoot();
+  const config = await getImportAppConfig();
+  const mailRoot = await resolveAppleMailRoot();
   const root = assertWithinAppleMailRoot(
     mailRoot,
     options?.root ?? mailRoot
   );
   const lookbackDays =
-    options?.lookbackDays ??
-    Number(process.env.APPLE_MAIL_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
+    options?.lookbackDays ?? config.appleMailLookbackDays ?? DEFAULT_LOOKBACK_DAYS;
 
   if (envelopeIndexPreferred()) {
     const envelope = await scanAppleMailViaEnvelopeIndex({

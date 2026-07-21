@@ -210,7 +210,7 @@ export async function scanAppleMailViaEnvelopeIndex(input: {
       filesScanned: 0,
       messages: [],
       warnings: [
-        "Could not open Mail Envelope Index (~/Library/Mail/V*/MailData/Envelope Index). Grant Full Disk Access to Cursor.app and restart.",
+        "Could not open Mail Envelope Index (~/Library/Mail/V*/MailData/Envelope Index). Grant Full Disk Access to the app running npm (e.g. Terminal.app) and restart it.",
       ],
       envelopeRows: 0,
       emlxLoaded: 0,
@@ -286,7 +286,7 @@ export async function diagnoseAppleMailAccess(): Promise<string[]> {
   const top = await readdir(mailRoot, { withFileTypes: true }).catch(
     (err: NodeJS.ErrnoException) => {
       notes.push(
-        `Cannot list ${mailRoot}: ${err.code ?? err.message}. Grant Full Disk Access to Cursor.app (System Settings → Privacy & Security → Full Disk Access).`
+        `Cannot list ${mailRoot}: ${err.code ?? err.message}. Grant Full Disk Access to the app running npm (System Settings → Privacy & Security → Full Disk Access), then restart that app.`
       );
       return [];
     }

@@ -1,4 +1,5 @@
 import { getAuthSession } from "@/lib/auth";
+import { AdvancedIntegrationSettingsEditor } from "@/components/advanced-integration-settings-editor";
 import { AppConfigEditor } from "@/components/app-config-editor";
 import { OllamaPreferenceToggle } from "@/components/ollama-preference-toggle";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -15,6 +16,10 @@ export default async function PreferencesSettingsPage() {
     <>
       <SettingsPanel title="Appearance">
         <ThemePreferenceControl />
+      </SettingsPanel>
+
+      <SettingsPanel title="Advanced integrations">
+        <AdvancedIntegrationSettingsEditor />
       </SettingsPanel>
 
       <SettingsPanel title="App configuration">

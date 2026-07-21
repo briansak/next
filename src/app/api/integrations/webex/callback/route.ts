@@ -1,24 +1,50 @@
-import { redirect } from "next/navigation";
-import { getAuthSession } from "@/lib/auth";
-import { exchangeWebexCode, getWebexConfig } from "@/lib/integrations/webex";
+import { NextResponse } from "next/server";
+import {
+  exchangeWebexCode,
+} from "@/lib/integrations/webex";
+import {
+  getWebexConfig,
+  getWebexScopes,
+} from "@/lib/integrations/webex/config-store";
 import { prisma } from "@/lib/db";
 import { invalidateCachedWebexSpaces } from "@/lib/integrations/webex/spaces-cache";
 
-export async function GET(request: Request) {
-  const session = await getAuthSession();
-  if (!session) {
-    redirect("/login");
-  }
+function redirectTarget(onboardingComplete: boolean, params: URLSearchParams) {
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return onboardingComplete ? `/settings/webex${suffix}` : `/setup${suffix}`;
+}
 
-  const config = getWebexConfig();
+export async function GET(request: Request) {
+  const config = await getWebexConfig();
   if (!config) {
-    redirect("/settings/webex?error=webex_not_configured");
+    return NextResponse.redirect(new URL("/setup?error=webex_not_configured", request.url));
   }
 
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
   const errorDescription = url.searchParams.get("error_description");
+  const stateRaw = url.searchParams.get("state");
+
+  let onboardingComplete = false;
+
+  if (stateRaw) {
+    try {
+      const state = JSON.parse(
+        Buffer.from(stateRaw, "base64url").toString("utf8")
+      ) as { userId?: string };
+      if (state.userId) {
+        const user = await prisma.user.findUnique({
+          where: { id: state.userId },
+          select: { onboardingComplete: true },
+        });
+        onboardingComplete = user?.onboardingComplete ?? false;
+      }
+    } catch {
+      // Ignore malformed state; fall back to setup redirect.
+    }
+  }
 
   if (error) {
     const params = new URLSearchParams({
@@ -26,14 +52,19 @@ export async function GET(request: Request) {
         error === "invalid_scope" ? "webex_invalid_scope" : "webex_auth_denied",
     });
     if (errorDescription) params.set("detail", errorDescription);
-    redirect(`/settings/webex?${params.toString()}`);
+    return NextResponse.redirect(
+      new URL(redirectTarget(onboardingComplete, params), request.url)
+    );
   }
 
   if (!code) {
-    redirect("/settings/webex");
+    return NextResponse.redirect(
+      new URL(redirectTarget(onboardingComplete, new URLSearchParams()), request.url)
+    );
   }
 
-  const tokens = await exchangeWebexCode(config, code);
+  const scopes = await getWebexScopes();
+  const tokens = await exchangeWebexCode(config, code, scopes);
   const expiresAt = new Date(Date.now() + tokens.expiresIn * 1000);
 
   await prisma.integrationToken.upsert({
@@ -53,5 +84,10 @@ export async function GET(request: Request) {
 
   invalidateCachedWebexSpaces();
 
-  redirect("/settings/webex?connected=webex");
+  return NextResponse.redirect(
+    new URL(
+      redirectTarget(onboardingComplete, new URLSearchParams({ connected: "webex" })),
+      request.url
+    )
+  );
 }

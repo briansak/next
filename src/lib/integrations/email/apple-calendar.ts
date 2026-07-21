@@ -3,6 +3,8 @@ import { homedir } from "os";
 import { join, resolve } from "path";
 import { promisify } from "util";
 import type { CalendarEvent } from "./ics";
+import { getImportAppConfig } from "@/lib/config/app-config-store";
+import type { ResolvedAppConfig } from "@/lib/config/app-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -40,6 +42,18 @@ export interface AppleCalendarScanResult {
   warnings: string[];
 }
 
+export async function isAppleCalendarImportEnabled(): Promise<boolean> {
+  const config = await getImportAppConfig();
+  return config.enableAppleCalendarImport;
+}
+
+export function appleCalendarImportEnabledFromConfig(
+  config: ResolvedAppConfig
+): boolean {
+  return config.enableAppleCalendarImport;
+}
+
+/** Env-only fallback for legacy scripts; prefer isAppleCalendarImportEnabled(). */
 export function appleCalendarImportEnabled(): boolean {
   return process.env.ENABLE_APPLE_CALENDAR_IMPORT === "true";
 }
@@ -59,7 +73,11 @@ function expandHome(path: string): string {
   return path;
 }
 
-export function appleCalendarEnv(): NodeJS.ProcessEnv {
+export function appleCalendarEnv(calendarNames?: string | null): NodeJS.ProcessEnv {
+  const configuredNames =
+    normalizeCalendarNames(calendarNames) ??
+    normalizeCalendarNames(process.env.APPLE_CALENDAR_NAMES);
+
   return {
     ...process.env,
     APPLE_CALENDAR_LOOKBACK_DAYS: String(
@@ -71,10 +89,13 @@ export function appleCalendarEnv(): NodeJS.ProcessEnv {
     APPLE_CALENDAR_MAX_EVENTS: String(
       Number(process.env.APPLE_CALENDAR_MAX_EVENTS ?? DEFAULT_MAX_EVENTS)
     ),
-    ...(process.env.APPLE_CALENDAR_NAMES
-      ? { APPLE_CALENDAR_NAMES: process.env.APPLE_CALENDAR_NAMES }
-      : {}),
+    ...(configuredNames ? { APPLE_CALENDAR_NAMES: configuredNames } : {}),
   };
+}
+
+function normalizeCalendarNames(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 export function rawEventToCalendarEvent(raw: AppleCalendarRawEvent): CalendarEvent {
@@ -93,7 +114,9 @@ export function rawEventToCalendarEvent(raw: AppleCalendarRawEvent): CalendarEve
   };
 }
 
-export async function fetchAppleCalendarEvents(): Promise<AppleCalendarScanResult> {
+export async function fetchAppleCalendarEvents(options?: {
+  calendarNames?: string | null;
+}): Promise<AppleCalendarScanResult> {
   const scriptPath = resolveAppleCalendarScriptPath();
   const timeoutMs = Number(
     process.env.APPLE_CALENDAR_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS
@@ -104,7 +127,7 @@ export async function fetchAppleCalendarEvents(): Promise<AppleCalendarScanResul
       "swift",
       [scriptPath],
       {
-        env: appleCalendarEnv(),
+        env: appleCalendarEnv(options?.calendarNames),
         maxBuffer: 20 * 1024 * 1024,
         timeout: timeoutMs,
       }
@@ -139,7 +162,7 @@ export async function fetchAppleCalendarEvents(): Promise<AppleCalendarScanResul
       }
       if (err.message.includes("ETIMEDOUT") || err.message.includes("timed out")) {
         throw new Error(
-          "Apple Calendar export timed out. Set APPLE_CALENDAR_NAMES to your Exchange calendar name (often \"Calendar\") and retry."
+          "Apple Calendar export timed out. Set calendar names in Settings → Email and retry."
         );
       }
     }

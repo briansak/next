@@ -7,9 +7,9 @@ import {
   importFromAppleMail,
   runEmailBackfills,
 } from "@/lib/integrations/email/ingest";
-import { appleCalendarImportEnabled } from "@/lib/integrations/email/apple-calendar";
+import { appleCalendarImportEnabledFromConfig } from "@/lib/integrations/email/apple-calendar";
 import { correlateGongEmails } from "@/lib/integrations/gong/correlate";
-import { appleMailImportEnabled } from "@/lib/integrations/email/apple-mail";
+import { appleMailImportEnabledFromConfig } from "@/lib/integrations/email/apple-mail";
 import { syncWebexMessages } from "@/lib/integrations/webex/ingest";
 import { syncWebexMeetings } from "@/lib/integrations/webex/meetings-ingest";
 import type { MeetingSyncResult } from "@/lib/integrations/webex/meetings-ingest";
@@ -130,7 +130,7 @@ export async function pollIngestion(): Promise<PollResult> {
   }
 
   if (await hasActiveEmailPolicy()) {
-    if (appleMailImportEnabled()) {
+    if (appleMailImportEnabledFromConfig(appConfig)) {
       const mail = await importFromAppleMail();
       result.appleMail = {
         imported: mail.imported,
@@ -141,7 +141,7 @@ export async function pollIngestion(): Promise<PollResult> {
       };
     }
 
-    if (appleCalendarImportEnabled()) {
+    if (appleCalendarImportEnabledFromConfig(appConfig)) {
       const calendar = await importFromAppleCalendar();
       result.appleCalendar = {
         imported: calendar.imported,

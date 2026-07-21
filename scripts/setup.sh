@@ -21,9 +21,7 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
 fi
 
 if [ ! -f .env ]; then
-  cp .env.example .env
-  echo "Created .env from .env.example"
-  echo "  → Edit .env: set SESSION_SECRET, SEED_* values, and optional integrations."
+  node scripts/ensure-env.mjs
   echo ""
 else
   echo "Using existing .env"
@@ -33,8 +31,8 @@ echo "==> Installing dependencies (npm ci)"
 npm ci
 
 if command -v docker >/dev/null 2>&1; then
-  echo "==> Starting PostgreSQL (docker compose)"
-  docker compose up -d
+  echo "==> Starting PostgreSQL (docker compose, on demand)"
+  node scripts/postgres-docker.mjs ensure
 else
   echo "==> Docker not found — ensure PostgreSQL is running and DATABASE_URL in .env is correct"
 fi
@@ -42,17 +40,23 @@ fi
 echo "==> Applying database schema"
 npm run db:push
 
-echo "==> Seeding initial tenant (idempotent)"
+echo "==> Seeding ingestion policies (idempotent)"
 npm run db:seed
+
+if command -v docker >/dev/null 2>&1; then
+  echo "==> Stopping PostgreSQL until you run npm run next"
+  node scripts/postgres-docker.mjs stop || true
+fi
 
 echo ""
 echo "Setup complete."
 echo ""
-echo "  Start the app:  npm run dev"
-echo "  Open:           http://localhost:3000"
+echo "  Start the app:  npm run next"
+echo "  (opens your browser automatically)"
 echo ""
-echo "  First login:    use SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD from .env"
-echo "                  or register at /register (first user becomes admin)"
+echo "  First launch:   complete the setup questionnaire (partner, preferences, Webex)"
+echo "  Webex guide:    docs/WEBEX_GETTING_STARTED.md"
 echo ""
 echo "  To get future updates:  npm run update"
+echo "  To remove local data: npm run uninstall"
 echo "  Full guide:             docs/INSTALL.md"

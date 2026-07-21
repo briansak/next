@@ -9,7 +9,7 @@ export default async function SettingsLayout({
 }) {
   const session = await getAuthSession();
   if (!session) {
-    redirect("/login");
+    redirect("/setup");
   }
 
   return (
@@ -17,8 +17,8 @@ export default async function SettingsLayout({
       <header style={{ marginBottom: "1.5rem" }}>
         <h1 style={{ fontSize: "1.5rem", fontWeight: 600 }}>Settings</h1>
         <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", marginTop: "0.25rem" }}>
-          {session.partnerName ?? session.partnerName} — ingestion and personal preferences
-          for {session.name ?? session.email}
+          {session.partnerName ?? "Local"} — ingestion and personal preferences
+          for {session.name ?? "you"}
         </p>
       </header>
 

@@ -14,9 +14,15 @@ This runs [scripts/update.sh](../scripts/update.sh), which:
 
 1. `git fetch` + merge the latest `main` branch
 2. `npm ci` — installs exact dependency versions from `package-lock.json`
-3. `npm run db:push` — applies any Prisma schema changes to your database
+3. `npm run db:push` — applies any Prisma schema changes (starts Postgres briefly if needed)
 
-**Your data is preserved:** `.env`, uploaded imports, and database content are not reset — unless a release notes a **breaking schema change** (see below).
+**Your data is preserved:** `.env`, Settings, and database content are not reset — unless a release notes a **breaking schema change** (see below).
+
+Restart the app after updating:
+
+```bash
+npm run next
+```
 
 ## Breaking change: single-user schema (2026)
 
@@ -28,16 +34,15 @@ If you upgraded from an older version and see Prisma errors about missing column
 npm run db:reset
 ```
 
-This wipes communications and settings in the DB and re-seeds from `.env`. Export anything you need before running it.
+This wipes communications and settings in the DB and re-seeds policies. Export anything you need before running it.
 
-After reset, sign in with `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` from `.env`.
+After reset, open `/setup` and complete the first-launch questionnaire again.
 
-Restart the app after updating:
+For a completely clean slate (including Docker volume):
 
 ```bash
-npm run dev
-# or for production:
-npm run build && npm run start
+npm run uninstall
+npm run setup
 ```
 
 ## Manual update
@@ -46,6 +51,7 @@ npm run build && npm run start
 git pull origin main
 npm ci
 npm run db:push
+npm run next
 ```
 
 ## If you forked the repository
@@ -76,10 +82,12 @@ bash scripts/update.sh upstream main
 
 | Safe (not overwritten by update) | May require attention after update |
 |----------------------------------|-------------------------------------|
-| `.env` | New required env vars in `.env.example` — compare and add missing keys |
-| Database contents | Schema changes — `db:push` handles most additions |
-| Local config in Settings UI | Rare breaking changes — check commit messages |
-| Webex tokens in DB | Re-run `npm run db:seed` only on fresh DBs, not for updates |
+| `.env` (auto-created DATABASE_URL) | New optional keys in `.env.example` — compare if you use legacy overrides |
+| Database contents (Docker volume) | Schema changes — `db:push` handles most additions |
+| Settings UI configuration | Rare breaking changes — check commit messages |
+| Encrypted Webex credentials in DB | Re-run `npm run db:seed` only on fresh DBs, not for updates |
+
+Prefer configuring via **Settings** rather than editing source, so updates stay painless.
 
 ## Merge conflicts
 
@@ -88,8 +96,6 @@ If you customized the codebase locally, `git pull` may conflict.
 1. Commit or stash your changes: `git stash`
 2. Run `npm run update`
 3. Reapply your changes: `git stash pop` and resolve conflicts
-
-Prefer configuring via `.env` and **Settings** rather than editing source, so updates stay painless.
 
 ## Staying informed
 

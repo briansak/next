@@ -6,9 +6,13 @@ import { useRouter } from "next/navigation";
 export function EmailEmlImport({
   disabled,
   policyActive,
+  appleMailEnabled = false,
+  appleCalendarEnabled = false,
 }: {
   disabled?: boolean;
   policyActive?: boolean;
+  appleMailEnabled?: boolean;
+  appleCalendarEnabled?: boolean;
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -16,6 +20,10 @@ export function EmailEmlImport({
   const [result, setResult] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+
+  const fileImportReady = Boolean(policyActive) && !disabled;
+  const appleMailReady = fileImportReady && appleMailEnabled;
+  const appleCalendarReady = fileImportReady && appleCalendarEnabled;
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -175,12 +183,12 @@ export function EmailEmlImport({
           type="file"
           accept=".eml,.zip,.pst,.ics,.mbox"
           multiple
-          disabled={disabled || loading || !policyActive}
+          disabled={disabled || loading || !fileImportReady}
           style={{ fontSize: "0.875rem" }}
         />
         <button
           type="submit"
-          disabled={disabled || loading || !policyActive}
+          disabled={disabled || loading || !fileImportReady}
           style={{
             alignSelf: "flex-start",
             background: "var(--accent)",
@@ -189,7 +197,7 @@ export function EmailEmlImport({
             padding: "0.5rem 1rem",
             borderRadius: 8,
             fontSize: "0.875rem",
-            opacity: disabled || loading || !policyActive ? 0.6 : 1,
+            opacity: disabled || loading || !fileImportReady ? 0.6 : 1,
           }}
         >
           {loading ? "Importing…" : "Import archive or .eml files"}
@@ -197,7 +205,14 @@ export function EmailEmlImport({
         <button
           type="button"
           onClick={importAppleMail}
-          disabled={disabled || loading || !policyActive}
+          disabled={disabled || loading || !appleMailReady}
+          title={
+            !policyActive
+              ? "Activate the email policy first"
+              : !appleMailEnabled
+                ? "Enable Apple Mail import in Settings above"
+                : undefined
+          }
           style={{
             alignSelf: "flex-start",
             background: "transparent",
@@ -206,15 +221,30 @@ export function EmailEmlImport({
             padding: "0.5rem 1rem",
             borderRadius: 8,
             fontSize: "0.875rem",
-            opacity: disabled || loading || !policyActive ? 0.6 : 1,
+            opacity: disabled || loading || !appleMailReady ? 0.6 : 1,
           }}
         >
           {loading ? "Scanning…" : "Import from Apple Mail"}
         </button>
+        {!appleMailEnabled && policyActive ? (
+          <p className="setup-hint" style={{ margin: 0 }}>
+            Apple Mail import is off. Enable it in{" "}
+            <strong>Settings → Email → Apple Mail &amp; Calendar</strong> above, then grant
+            Full Disk Access to the app running npm — see{" "}
+            <a href="/docs/apple-mail-calendar-getting-started">getting started guide</a>.
+          </p>
+        ) : null}
         <button
           type="button"
           onClick={importAppleCalendar}
-          disabled={disabled || loading || !policyActive}
+          disabled={disabled || loading || !appleCalendarReady}
+          title={
+            !policyActive
+              ? "Activate the email policy first"
+              : !appleCalendarEnabled
+                ? "Enable Apple Calendar import in Settings above"
+                : undefined
+          }
           style={{
             alignSelf: "flex-start",
             background: "transparent",
@@ -223,11 +253,19 @@ export function EmailEmlImport({
             padding: "0.5rem 1rem",
             borderRadius: 8,
             fontSize: "0.875rem",
-            opacity: disabled || loading || !policyActive ? 0.6 : 1,
+            opacity: disabled || loading || !appleCalendarReady ? 0.6 : 1,
           }}
         >
           {loading ? "Reading…" : "Import from Apple Calendar"}
         </button>
+        {!appleCalendarEnabled && policyActive ? (
+          <p className="setup-hint" style={{ margin: 0 }}>
+            Apple Calendar import is off. Enable it in{" "}
+            <strong>Settings → Email → Apple Mail &amp; Calendar</strong> above, then allow
+            Calendars access — see{" "}
+            <a href="/docs/apple-mail-calendar-getting-started">getting started guide</a>.
+          </p>
+        ) : null}
         {result && (
           <p style={{ color: "var(--low)", fontSize: "0.875rem", margin: 0 }}>
             {result}
@@ -264,8 +302,9 @@ export function EmailEmlImport({
               margin: 0,
             }}
           >
-            Activate the email policy first. Configure partner domains and subject prefixes
-            above, then activate the policy to import mail and calendar files.
+            Import buttons are disabled until the email policy is active. Activate the policy
+            above, enable Apple Mail/Calendar in the panel above if needed —{" "}
+            <a href="/docs/apple-mail-calendar-getting-started">getting started guide</a>.
           </p>
         )}
       </form>

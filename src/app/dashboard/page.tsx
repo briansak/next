@@ -111,7 +111,7 @@ const DEAL_LOOKBACK_DAYS = 14;
 export default async function DashboardPage() {
   const session = await getAuthSession();
   if (!session) {
-    redirect("/login");
+    redirect("/setup");
   }
 
   const userEmail = session.email.toLowerCase();
@@ -799,7 +799,7 @@ export default async function DashboardPage() {
           <Panel title="Your next steps" count={nextStepCards.length}>
             <AddManualNextStep />
             {nextStepCards.length === 0 ? (
-              <EmptyState message="No open next steps assigned to you. Paste a CFP, deadline, or task above to add one." />
+              <EmptyState message="No open next steps assigned to you. Add a deadline, ask, or task using the field above." />
             ) : (
               <NextStepsPanel steps={nextStepCards} />
             )}

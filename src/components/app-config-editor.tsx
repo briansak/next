@@ -39,56 +39,169 @@ const inputStyle = {
   fontSize: "0.875rem",
 } as const;
 
+const inlineButtonStyle = {
+  padding: "0.5rem 0.85rem",
+  borderRadius: 8,
+  border: "1px solid var(--border)",
+  background: "var(--surface)",
+  color: "var(--text)",
+  fontSize: "0.875rem",
+  cursor: "pointer",
+  whiteSpace: "nowrap" as const,
+};
+
 export function AppConfigEditor() {
   const router = useRouter();
   const [config, setConfig] = useState<ResolvedAppConfig | null>(null);
+  const [ollamaUrlDraft, setOllamaUrlDraft] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [modelsLoadedForUrl, setModelsLoadedForUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [savingOllamaUrl, setSavingOllamaUrl] = useState(false);
+  const [savingOllamaModel, setSavingOllamaModel] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ollamaMessage, setOllamaMessage] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
   const loadConfig = useCallback(async () => {
     const res = await fetch("/api/settings/app-config");
     if (!res.ok) return;
     const data = await res.json();
-    setConfig(data.config ?? null);
+    const nextConfig = data.config ?? null;
+    setConfig(nextConfig);
+    setOllamaUrlDraft(nextConfig?.ollamaBaseUrl ?? "");
   }, []);
 
   useEffect(() => {
     void loadConfig();
   }, [loadConfig]);
 
-  async function refreshModels(baseUrl?: string | null) {
-    const url = baseUrl ?? config?.ollamaBaseUrl;
-    if (!url) {
+  const probeModels = useCallback(async (baseUrl: string | null) => {
+    const trimmed = baseUrl?.trim();
+    if (!trimmed) {
       setModels([]);
-      return;
+      setModelsLoadedForUrl(null);
+      return [];
     }
 
     setLoadingModels(true);
+    setOllamaMessage(null);
     try {
       const res = await fetch(
-        `/api/settings/ollama/models?baseUrl=${encodeURIComponent(url)}`
+        `/api/settings/ollama/models?baseUrl=${encodeURIComponent(trimmed)}`
       );
       const data = await res.json().catch(() => ({}));
-      setModels(Array.isArray(data.models) ? data.models : []);
+      if (!res.ok) {
+        setModels([]);
+        setModelsLoadedForUrl(null);
+        setOllamaMessage(data.error ?? "Could not reach Ollama at that URL.");
+        return [];
+      }
+
+      const nextModels = Array.isArray(data.models) ? data.models : [];
+      setModels(nextModels);
+      setModelsLoadedForUrl(trimmed);
+      if (nextModels.length === 0) {
+        setOllamaMessage("Connected, but no models were reported. Pull a model in Ollama first.");
+      } else {
+        setOllamaMessage(`Found ${nextModels.length} model${nextModels.length === 1 ? "" : "s"}.`);
+      }
+      return nextModels;
     } finally {
       setLoadingModels(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     if (config?.ollamaBaseUrl) {
-      void refreshModels(config.ollamaBaseUrl);
+      void probeModels(config.ollamaBaseUrl);
     }
-  }, [config?.ollamaBaseUrl]);
+  }, [config?.ollamaBaseUrl, probeModels]);
 
   function updateConfig<K extends keyof ResolvedAppConfig>(
     key: K,
     value: ResolvedAppConfig[K]
   ) {
     setConfig((current) => (current ? { ...current, [key]: value } : current));
+  }
+
+  async function saveOllamaUrl() {
+    if (!config) return;
+
+    const nextUrl = ollamaUrlDraft.trim() || null;
+    setSavingOllamaUrl(true);
+    setError(null);
+    setOllamaMessage(null);
+
+    try {
+      const res = await fetch("/api/settings/app-config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ollamaBaseUrl: nextUrl }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "Could not save Ollama URL");
+        return;
+      }
+
+      const savedConfig = data.config ?? { ...config, ollamaBaseUrl: nextUrl };
+      setConfig(savedConfig);
+      setOllamaUrlDraft(savedConfig.ollamaBaseUrl ?? "");
+      router.refresh();
+
+      if (savedConfig.ollamaBaseUrl) {
+        const discovered = await probeModels(savedConfig.ollamaBaseUrl);
+        if (
+          discovered.length > 0 &&
+          savedConfig.ollamaModel &&
+          !discovered.includes(savedConfig.ollamaModel)
+        ) {
+          await saveOllamaModel(discovered[0]!, { silent: true });
+        }
+      } else {
+        setModels([]);
+        setModelsLoadedForUrl(null);
+        setOllamaMessage("Ollama URL cleared.");
+      }
+    } finally {
+      setSavingOllamaUrl(false);
+    }
+  }
+
+  async function saveOllamaModel(
+    model: string,
+    options?: { silent?: boolean }
+  ) {
+    if (!config || !model.trim()) return;
+
+    setSavingOllamaModel(true);
+    if (!options?.silent) {
+      setError(null);
+    }
+
+    try {
+      const res = await fetch("/api/settings/app-config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ollamaModel: model.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (!options?.silent) {
+          setError(data.error ?? "Could not save Ollama model");
+        }
+        return;
+      }
+      setConfig(data.config ?? { ...config, ollamaModel: model.trim() });
+      if (!options?.silent) {
+        setOllamaMessage(`Using model ${model.trim()}.`);
+      }
+      router.refresh();
+    } finally {
+      setSavingOllamaModel(false);
+    }
   }
 
   async function saveConfig(event: React.FormEvent) {
@@ -118,6 +231,16 @@ export function AppConfigEditor() {
     }
   }
 
+  const modelOptions =
+    config?.ollamaModel && !models.includes(config.ollamaModel)
+      ? [config.ollamaModel, ...models]
+      : models;
+
+  const showModelPicker =
+    Boolean(config?.ollamaBaseUrl) &&
+    modelsLoadedForUrl === config?.ollamaBaseUrl &&
+    modelOptions.length > 0;
+
   if (!config) {
     return (
       <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", margin: 0 }}>
@@ -136,8 +259,8 @@ export function AppConfigEditor() {
           lineHeight: 1.5,
         }}
       >
-        Configure non-sensitive app behavior here. Secrets such as database credentials,
-        OAuth client secrets, and webhook keys stay in <code>.env</code>.
+        Configure app behavior here. Sensitive values such as Webex OAuth credentials are saved
+        under <strong>Settings → Webex</strong> and encrypted locally.
       </p>
 
       <div style={{ display: "grid", gap: "1.25rem" }}>
@@ -145,59 +268,76 @@ export function AppConfigEditor() {
           <label htmlFor="ollama-base-url" style={fieldLabelStyle}>
             Ollama base URL
           </label>
-          <input
-            id="ollama-base-url"
-            type="url"
-            value={config.ollamaBaseUrl ?? ""}
-            disabled={busy}
-            onChange={(event) =>
-              updateConfig("ollamaBaseUrl", event.target.value.trim() || null)
-            }
-            onBlur={() => void refreshModels(config.ollamaBaseUrl)}
-            placeholder="http://localhost:11434"
-            style={inputStyle}
-          />
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", maxWidth: "32rem" }}>
+            <input
+              id="ollama-base-url"
+              type="url"
+              value={ollamaUrlDraft}
+              disabled={busy || savingOllamaUrl}
+              onChange={(event) => setOllamaUrlDraft(event.target.value)}
+              placeholder="http://localhost:11434"
+              style={{ ...inputStyle, flex: "1 1 16rem", maxWidth: "none" }}
+            />
+            <button
+              type="button"
+              disabled={busy || savingOllamaUrl || loadingModels}
+              onClick={() => void saveOllamaUrl()}
+              style={{
+                ...inlineButtonStyle,
+                background: "var(--accent)",
+                borderColor: "var(--accent)",
+                color: "#fff",
+                opacity: busy || savingOllamaUrl || loadingModels ? 0.7 : 1,
+              }}
+            >
+              {savingOllamaUrl || loadingModels ? "Saving…" : "Save URL"}
+            </button>
+          </div>
           <span style={hintStyle}>
-            Local Ollama server used for summaries and transcript analysis.
+            Save your local Ollama server URL, then pick a model from the list below.
           </span>
+          {ollamaMessage ? (
+            <span style={{ ...hintStyle, color: "var(--text)" }}>{ollamaMessage}</span>
+          ) : null}
         </div>
 
         <div>
           <label htmlFor="ollama-model" style={fieldLabelStyle}>
             Ollama model
           </label>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          {showModelPicker ? (
+            <select
+              id="ollama-model"
+              value={config.ollamaModel}
+              disabled={busy || savingOllamaModel}
+              onChange={(event) => void saveOllamaModel(event.target.value)}
+              style={{ ...inputStyle, maxWidth: "32rem" }}
+            >
+              {modelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          ) : (
             <input
               id="ollama-model"
-              list="ollama-model-options"
               value={config.ollamaModel}
-              disabled={busy}
-              onChange={(event) => updateConfig("ollamaModel", event.target.value)}
-              placeholder="llama3.1:8b"
-              style={{ ...inputStyle, flex: "1 1 16rem" }}
+              disabled
+              placeholder={
+                config.ollamaBaseUrl
+                  ? loadingModels
+                    ? "Loading models…"
+                    : "Save URL to load models"
+                  : "Save an Ollama URL first"
+              }
+              style={{ ...inputStyle, maxWidth: "32rem", opacity: 0.7 }}
             />
-            <button
-              type="button"
-              disabled={busy || !config.ollamaBaseUrl || loadingModels}
-              onClick={() => void refreshModels(config.ollamaBaseUrl)}
-              style={{
-                padding: "0.5rem 0.75rem",
-                borderRadius: 8,
-                border: "1px solid var(--border)",
-                background: "var(--surface)",
-                cursor: "pointer",
-              }}
-            >
-              {loadingModels ? "Loading…" : "Refresh models"}
-            </button>
-          </div>
-          <datalist id="ollama-model-options">
-            {models.map((model) => (
-              <option key={model} value={model} />
-            ))}
-          </datalist>
+          )}
           <span style={hintStyle}>
-            Pick from detected local models or type a model name manually.
+            {showModelPicker
+              ? "Model changes save immediately."
+              : "Available models appear here after you save a reachable Ollama URL."}
           </span>
         </div>
 
