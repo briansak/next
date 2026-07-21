@@ -2,6 +2,9 @@
 /**
  * Start/stop the local Docker Postgres used by Next (docker-compose.yml).
  * Data persists in the named volume between runs; the container stops when the app exits.
+ *
+ * Default install requires Docker Desktop — no manual Postgres or .env editing.
+ * Set NEXT_MANAGE_POSTGRES=false only for advanced external-database setups.
  */
 import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
@@ -13,6 +16,8 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const COMPOSE_FILE = path.join(ROOT, "docker-compose.yml");
 const DEFAULT_DATABASE_URL =
   "postgresql://postgres:postgres@localhost:5432/next?schema=public";
+
+const DOCKER_INSTALL_URL = "https://www.docker.com/products/docker-desktop/";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,12 +45,84 @@ function isManagedLocalPostgres(databaseUrl) {
   return isLocalHost && target.port === 5432;
 }
 
+export function isDockerPostgresManaged() {
+  return process.env.NEXT_MANAGE_POSTGRES !== "false";
+}
+
+function dockerBinaryExists() {
+  const result = spawnSync("docker", ["--version"], {
+    stdio: "ignore",
+    env: process.env,
+  });
+  return result.status === 0;
+}
+
 function hasDocker() {
   const result = spawnSync("docker", ["info"], {
     stdio: "ignore",
     env: process.env,
   });
   return result.status === 0;
+}
+
+function isOurPostgresContainerRunning() {
+  if (!hasDocker()) return false;
+
+  const list = spawnSync(
+    "docker",
+    ["compose", "-f", COMPOSE_FILE, "ps", "-q", "db"],
+    { cwd: ROOT, encoding: "utf8", env: process.env }
+  );
+  const containerId = list.stdout?.trim();
+  if (!containerId || list.status !== 0) return false;
+
+  const inspect = spawnSync(
+    "docker",
+    ["inspect", "-f", "{{.State.Running}}", containerId],
+    { encoding: "utf8", env: process.env }
+  );
+  return inspect.stdout?.trim() === "true";
+}
+
+/** Fail fast when Docker is required but missing or not running. */
+export function assertDockerReady() {
+  if (!isDockerPostgresManaged()) return;
+
+  if (!dockerBinaryExists()) {
+    throw new Error(
+      [
+        "Docker is required for Next.",
+        "",
+        "Install Docker Desktop, then run setup again:",
+        `  ${DOCKER_INSTALL_URL}`,
+        "",
+        "Next uses Docker to run PostgreSQL locally — no separate database install or .env editing.",
+      ].join("\n")
+    );
+  }
+
+  if (!hasDocker()) {
+    throw new Error(
+      [
+        "Docker is installed but not running.",
+        "",
+        "Start Docker Desktop, wait until it is ready, then run setup again.",
+      ].join("\n")
+    );
+  }
+}
+
+function portConflictMessage() {
+  return [
+    "Port 5432 is already in use by another PostgreSQL server (often Homebrew).",
+    "",
+    "Next expects to manage Postgres via Docker on localhost:5432.",
+    "Stop the other server, then run setup again. Example:",
+    "  brew services stop postgresql@16",
+    "",
+    "Verify the port is free:",
+    "  lsof -i :5432",
+  ].join("\n");
 }
 
 function checkTcp(host, port, timeoutMs = 2000) {
@@ -95,7 +172,7 @@ async function waitForPostgres(databaseUrl, attempts = 60) {
  * @returns {{ startedByUs: boolean, managedDocker: boolean }}
  */
 export async function ensurePostgres() {
-  if (process.env.NEXT_MANAGE_POSTGRES === "false") {
+  if (!isDockerPostgresManaged()) {
     const databaseUrl = process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL;
     if (!(await isPostgresReachable(databaseUrl))) {
       throw new Error(
@@ -105,24 +182,26 @@ export async function ensurePostgres() {
     return { startedByUs: false, managedDocker: false };
   }
 
+  assertDockerReady();
   await ensureEnvFile();
   const databaseUrl = process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL;
   const managedDocker = isManagedLocalPostgres(databaseUrl);
 
-  if (await isPostgresReachable(databaseUrl)) {
-    return { startedByUs: false, managedDocker };
-  }
-
   if (!managedDocker) {
-    throw new Error(
-      `Postgres is not reachable at ${databaseUrl}. Start your database server and try again.`
-    );
+    if (!(await isPostgresReachable(databaseUrl))) {
+      throw new Error(
+        `Postgres is not reachable at ${databaseUrl}. ` +
+          "For external databases, set NEXT_MANAGE_POSTGRES=false and ensure the server is running."
+      );
+    }
+    return { startedByUs: false, managedDocker: false };
   }
 
-  if (!hasDocker()) {
-    throw new Error(
-      "Postgres is not running and Docker was not found. Install Docker or start Postgres manually."
-    );
+  if (await isPostgresReachable(databaseUrl)) {
+    if (!isOurPostgresContainerRunning()) {
+      throw new Error(portConflictMessage());
+    }
+    return { startedByUs: false, managedDocker: true };
   }
 
   console.log("Starting local Postgres (docker compose)…");
@@ -138,6 +217,8 @@ export async function ensurePostgres() {
 
 /** Stop the Docker Postgres service (data volume is kept). */
 export async function stopManagedPostgres() {
+  if (!isDockerPostgresManaged()) return;
+
   await ensureEnvFile();
   const databaseUrl = process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL;
   if (!isManagedLocalPostgres(databaseUrl) || !hasDocker()) return;
@@ -153,12 +234,19 @@ export async function stopManagedPostgres() {
 const command = process.argv[2];
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (command === "ensure") {
-    await ensurePostgres();
-  } else if (command === "stop") {
-    await stopManagedPostgres();
-  } else {
-    console.error("Usage: node scripts/postgres-docker.mjs <ensure|stop>");
+  try {
+    if (command === "check-docker") {
+      assertDockerReady();
+    } else if (command === "ensure") {
+      await ensurePostgres();
+    } else if (command === "stop") {
+      await stopManagedPostgres();
+    } else {
+      console.error("Usage: node scripts/postgres-docker.mjs <check-docker|ensure|stop>");
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
     process.exit(1);
   }
 }

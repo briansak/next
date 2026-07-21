@@ -17,7 +17,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full design.
 
 ## Quick start (new install)
 
-**Prerequisites:** Node.js 20+, Docker (recommended for local Postgres), Git.
+**Prerequisites:** Node.js 20+, **Docker Desktop**, Git.
 
 ```bash
 git clone git@github.com:briansak/next.git
@@ -28,7 +28,7 @@ npm run next
 
 That’s it for a first run:
 
-1. **`npm run setup`** — installs dependencies, creates a minimal `.env` with default `DATABASE_URL`, starts Postgres briefly, applies schema, seeds policies, then stops Postgres.
+1. **`npm run setup`** — checks Docker, installs dependencies, auto-creates `.env`, starts Postgres in Docker briefly, applies schema, seeds policies, then stops Postgres.
 2. **`npm run next`** — starts Postgres on demand, opens your browser, runs the dev server. On first launch you complete the setup questionnaire; afterward you land on **My Priorities**.
 
 Configure Webex, Ollama, and everything else in **Settings** — not in `.env`.
@@ -70,19 +70,27 @@ Then either run `npm run setup` for a fresh install, or delete the project folde
 ## Stack
 
 - Next.js 15 + TypeScript
-- PostgreSQL + Prisma (Docker Compose on your laptop)
+- PostgreSQL + Prisma (bundled via Docker Compose — no separate DB install)
 - Local heuristics engine (Ollama optional)
 - No login — first-launch setup questionnaire
 
+## Prerequisites
+
+| Required | Purpose |
+|----------|---------|
+| **Node.js 20+** | App runtime |
+| **Docker Desktop** | Runs PostgreSQL locally — started/stopped automatically by Next |
+| **Git** | Clone and updates |
+
+You do **not** install PostgreSQL yourself or edit `.env` for a normal setup.
+
 ## Configuration (no `.env` editing required)
 
-A minimal `.env` is **auto-created** on first `npm run setup` or `npm run next`:
+A minimal `.env` is **auto-created** on first `npm run setup` or `npm run next` with the Docker Postgres URL. You should not need to edit it.
 
 ```env
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/next?schema=public"
 ```
-
-That matches the included `docker-compose.yml`. Edit `.env` only if Postgres runs elsewhere.
 
 Everything else is configured in the app:
 
@@ -94,9 +102,9 @@ Everything else is configured in the app:
 | Apple Mail/Calendar import | **Settings → Email** |
 | PST import, Whisper, poll secret | **Settings → Preferences → Advanced integrations** |
 
-Optional `.env` overrides and legacy fallbacks are documented in [.env.example](.env.example).
+Optional legacy `.env` overrides are documented in [.env.example](.env.example).
 
-Advanced: set `NEXT_MANAGE_POSTGRES=false` if you run your own Postgres server (Next won’t start/stop Docker for you).
+**Advanced only:** set `NEXT_MANAGE_POSTGRES=false` and provide your own `DATABASE_URL` if you run Postgres outside Docker (not supported for normal installs).
 
 ## npm scripts
 
@@ -117,7 +125,7 @@ Advanced: set `NEXT_MANAGE_POSTGRES=false` if you run your own Postgres server (
 
 Postgres runs **only while needed**:
 
-- **`npm run next`** — Docker Postgres starts if `localhost:5432` isn’t reachable; **stops when you quit** the dev server (if this session started it). Data stays in the `next_pgdata` volume.
+- **`npm run next`** — Docker Postgres starts if needed; **stops when you quit** the dev server (if this session started it). Data stays in the Docker volume.
 - **`npm run setup`** / **`db:*` commands** — start Postgres temporarily for the command. Setup stops Postgres when finished.
 - **`npm run uninstall`** — `docker compose down -v` removes the volume (all app data gone).
 - **`npm run db:reset`** — wipe tables but keep the volume; complete `/setup` again.

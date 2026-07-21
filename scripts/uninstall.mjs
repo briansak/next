@@ -32,8 +32,13 @@ async function uninstall() {
     }
   } else {
     console.log("Docker not found — skipped container/volume removal.");
-    console.log("If you used Docker Postgres, run manually:");
+    console.log("");
+    console.log("Docker is required for the normal Next install.");
+    console.log("Install Docker Desktop, then run:");
     console.log(`  docker compose -f ${COMPOSE_FILE} down -v`);
+    console.log("");
+    console.log("If you used Homebrew Postgres instead, drop the database manually:");
+    console.log('  psql postgresql://postgres:postgres@localhost:5432/postgres -c "DROP DATABASE next;"');
   }
 
   try {

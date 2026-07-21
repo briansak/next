@@ -20,6 +20,12 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
   exit 1
 fi
 
+if [ "${NEXT_MANAGE_POSTGRES:-}" != "false" ]; then
+  echo "==> Checking Docker (required for local Postgres)"
+  node scripts/postgres-docker.mjs check-docker
+  echo ""
+fi
+
 if [ ! -f .env ]; then
   node scripts/ensure-env.mjs
   echo ""
@@ -30,12 +36,8 @@ fi
 echo "==> Installing dependencies (npm ci)"
 npm ci
 
-if command -v docker >/dev/null 2>&1; then
-  echo "==> Starting PostgreSQL (docker compose, on demand)"
-  node scripts/postgres-docker.mjs ensure
-else
-  echo "==> Docker not found — ensure PostgreSQL is running and DATABASE_URL in .env is correct"
-fi
+echo "==> Starting PostgreSQL (docker compose, on demand)"
+node scripts/postgres-docker.mjs ensure
 
 echo "==> Applying database schema"
 npm run db:push
@@ -43,7 +45,7 @@ npm run db:push
 echo "==> Seeding ingestion policies (idempotent)"
 npm run db:seed
 
-if command -v docker >/dev/null 2>&1; then
+if [ "${NEXT_MANAGE_POSTGRES:-}" != "false" ]; then
   echo "==> Stopping PostgreSQL until you run npm run next"
   node scripts/postgres-docker.mjs stop || true
 fi
@@ -60,3 +62,4 @@ echo ""
 echo "  To get future updates:  npm run update"
 echo "  To remove local data: npm run uninstall"
 echo "  Full guide:             docs/INSTALL.md"
+echo ""

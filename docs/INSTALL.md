@@ -1,17 +1,17 @@
 # Install Next from GitHub
 
-This guide is for a **fresh install** — cloning [github.com/briansak/next](https://github.com/briansak/next) and running your own instance on a laptop. No manual `.env` editing is required for the standard Docker Postgres setup.
+This guide is for a **fresh install** — cloning [github.com/briansak/next](https://github.com/briansak/next) and running your own instance on a laptop. **No manual PostgreSQL install and no `.env` editing** — Docker runs the database for you.
 
 ## Prerequisites
 
 | Requirement | Notes |
 |-------------|--------|
 | **Node.js 20+** | [nodejs.org](https://nodejs.org) |
-| **Docker** | Recommended — Next manages local Postgres via Docker Compose |
+| **Docker Desktop** | **Required** — Next runs PostgreSQL in Docker automatically |
 | **Git** | To clone and receive updates |
 | **(Optional) Ollama** | Local AI summaries — configure in Settings → Preferences |
 
-If you don’t use Docker, you need PostgreSQL 15+ running elsewhere and a custom `DATABASE_URL` in `.env`.
+Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and **start it before** `npm run setup`. Next will fail fast with a clear message if Docker is missing or not running.
 
 ---
 
@@ -39,10 +39,11 @@ npm run setup
 
 This will:
 
-1. **Create `.env`** automatically with the default local Postgres URL (if `.env` doesn’t exist)
-2. Run **`npm ci`** — install dependencies
-3. **Start Postgres briefly** via Docker, apply schema (`db:push`), seed policies (`db:seed`)
-4. **Stop Postgres** — it stays off until you run the app
+1. **Verify Docker** is installed and running
+2. **Create `.env`** automatically with the Docker Postgres URL (if `.env` doesn’t exist)
+3. Run **`npm ci`** — install dependencies
+4. **Start Postgres briefly** in Docker, apply schema (`db:push`), seed policies (`db:seed`)
+5. **Stop Postgres** — it stays off until you run the app
 
 You do **not** need to copy `.env.example` or edit Webex credentials in a file.
 
@@ -102,7 +103,7 @@ Postgres runs **only while the app or a db command needs it**. Your data **persi
 | Wipe app data | `npm run db:reset` | Starts for command | Tables wiped, volume kept |
 | Full remove | `npm run uninstall` | Container + volume removed | **All DB data gone** |
 
-Set `NEXT_MANAGE_POSTGRES=false` in `.env` if you use your own Postgres server (Next won’t start/stop Docker).
+**Advanced only:** set `NEXT_MANAGE_POSTGRES=false` and your own `DATABASE_URL` if you run Postgres outside Docker (not supported for normal installs).
 
 ---
 
@@ -144,15 +145,13 @@ Then open `/setup` and complete the questionnaire again.
 
 ## `.env` — what’s actually in it?
 
-On first run, Next auto-creates:
+On first run, Next auto-creates a single line pointing at the Docker Postgres container. **Do not edit** unless you use an advanced external-database setup.
 
 ```env
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/next?schema=public"
 ```
 
-That matches [docker-compose.yml](../docker-compose.yml). **Edit only if** Postgres runs on a different host, port, or database name.
-
-Optional overrides are listed in [.env.example](../.env.example) (legacy fallbacks only — Settings is preferred).
+Optional legacy overrides are listed in [.env.example](../.env.example). Settings in the app UI is preferred for everything else.
 
 Encryption key for stored secrets: auto-created at `.local/encryption.key` (or set `APP_ENCRYPTION_KEY`).
 
@@ -160,7 +159,10 @@ Encryption key for stored secrets: auto-created at `.local/encryption.key` (or s
 
 ## Manual setup (without `npm run setup`)
 
+Requires Docker Desktop running:
+
 ```bash
+node scripts/postgres-docker.mjs check-docker
 npm ci
 node scripts/ensure-env.mjs          # create .env if missing
 node scripts/postgres-docker.mjs ensure
@@ -179,7 +181,20 @@ npm run build
 npm run start
 ```
 
-Use a managed PostgreSQL instance and set `DATABASE_URL` accordingly. Set app public URL in **Settings → Webex** (or legacy `NEXT_PUBLIC_APP_URL` in `.env`).
+Use a managed PostgreSQL instance, set `DATABASE_URL`, and set `NEXT_MANAGE_POSTGRES=false`. Set app public URL in **Settings → Webex**.
+
+---
+
+## Advanced: external PostgreSQL (not recommended)
+
+If you cannot use Docker, set in `.env`:
+
+```env
+NEXT_MANAGE_POSTGRES=false
+DATABASE_URL="postgresql://user:pass@host:5432/next?schema=public"
+```
+
+You must install, run, and back up Postgres yourself. `npm run uninstall` will **not** remove this database.
 
 ---
 
@@ -187,9 +202,11 @@ Use a managed PostgreSQL instance and set `DATABASE_URL` accordingly. Set app pu
 
 | Problem | Fix |
 |---------|-----|
-| `EALLOWSCRIPTS` during `npm ci` / setup | npm 11+ with `allow-scripts` in your user `~/.npmrc` conflicts with project installs. This repo declares `allowScripts` in `package.json` — run `git pull` for the latest. Or remove `allow-scripts=…` from `~/.npmrc`. |
-| Postgres data survives `npm run uninstall` | Homebrew Postgres on port 5432 is in use instead of Docker — stop it (`brew services stop postgresql@16`), then use Docker; see README database section |
-| `Can't reach database server` | Install/start Docker, or run `npm run next` (starts Postgres). Check `DATABASE_URL`. |
+| `Docker is required for Next` | Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it before setup |
+| `Docker is installed but not running` | Open Docker Desktop and wait until it is ready |
+| `Port 5432 is already in use` | Another Postgres (often Homebrew) is running — `brew services stop postgresql@16`, then `lsof -i :5432` should show nothing |
+| `EALLOWSCRIPTS` during `npm ci` / setup | npm 11+ with `allow-scripts` in your user `~/.npmrc` — run `git pull` for latest `allowScripts` in `package.json`, or remove `allow-scripts=…` from `~/.npmrc` |
+| `Can't reach database server` | Start Docker Desktop, then run `npm run next` (starts Postgres automatically) |
 | Stuck on setup / schema errors | `npm run db:reset` then complete `/setup` again |
 | Webex connect button missing | Save Client ID and secret in **Settings → Webex**, then Connect |
 | `redirect_uri_mismatch` | Redirect URI in developer.webex.com must match **Settings → Webex** exactly |
