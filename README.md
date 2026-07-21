@@ -1,6 +1,6 @@
 # Next
 
-Actionable insights from your communications. Next collects, summarizes, and prioritizes messages from **explicitly allowlisted** Webex Spaces and email sources — built to run **locally on your laptop** for one partner coverage workflow.
+Actionable insights from your communications. Next collects, summarizes, and prioritizes messages from **explicitly allowlisted** Webex Spaces and email sources — built to run **locally on your laptop** for partner coverage workflow.
 
 **Repository:** [github.com/briansak/next](https://github.com/briansak/next)
 
@@ -8,11 +8,10 @@ Actionable insights from your communications. Next collects, summarizes, and pri
 
 - **Scoped ingestion** — Webex spaces, Apple Mail/Calendar, and file import (`.eml`, `.pst`, `.ics`). Personal inboxes stay out unless you explicitly import them.
 - **Single-user local app** — One account owns the workspace; all data is local to your machine.
-- **Heuristic prioritization** — Local rules detect asks, deadlines, and stale threads without cloud LLMs.
-- **Next steps board** — Shared action items derived from communications.
+- **Heuristic prioritization** — Local rules detect asks, deadlines, and stale threads without foundation LLMs.
+- **Next steps board** — Action items derived from communications.
 - **Optional Ollama** — Richer summaries via a local LLM when available.
-- **Browser-configurable settings** — Webex OAuth, Ollama, auto-poll, Apple import, Gong, SLA, and more — no manual `.env` editing for normal use.
-
+- **Browser-configurable settings** — Webex OAuth, Ollama, auto-poll, Apple import, Gong, SLA, and more.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full design.
 
 ## Quick start (new install)
@@ -29,9 +28,9 @@ npm run next
 That’s it for a first run:
 
 1. **`npm run setup`** — installs Colima/Docker CLI if needed, installs dependencies, auto-creates `.env`, starts Postgres in Docker briefly, applies schema, seeds policies, then stops Postgres.
-2. **`npm run next`** — starts Postgres on demand, opens your browser, runs the dev server. On first launch you complete the setup questionnaire; afterward you land on **My Priorities**.
+2. **`npm run next`** — starts Postgres on demand, opens your browser, runs the server. On first launch you complete the setup questionnaire; afterward you land on **My Priorities**.
 
-Configure Webex, Ollama, and everything else in **Settings** — not in `.env`.
+Configure Webex, Ollama, and everything else in **Settings**.
 
 Full guide: **[docs/INSTALL.md](docs/INSTALL.md)** · Webex: **[docs/WEBEX_GETTING_STARTED.md](docs/WEBEX_GETTING_STARTED.md)**
 
@@ -41,7 +40,7 @@ Full guide: **[docs/INSTALL.md](docs/INSTALL.md)** · Webex: **[docs/WEBEX_GETTI
 npm run next    # start app (Postgres starts/stops with the app)
 ```
 
-Your browser opens automatically. Quit with `Ctrl+C` — Postgres stops, but **your data persists** in the Docker volume until you uninstall or reset.
+Your browser opens automatically targeted at http://localhost:3000.
 
 ## Getting updates
 
@@ -70,31 +69,22 @@ Then either run `npm run setup` for a fresh install, or delete the project folde
 ## Stack
 
 - Next.js 15 + TypeScript
-- PostgreSQL + Prisma (Colima + Docker Compose — no Docker Desktop license)
+- PostgreSQL + Prisma (Colima + Docker Compose)
 - Local heuristics engine (Ollama optional)
-- No login — first-launch setup questionnaire
 
 ## Prerequisites
 
 | Required | Purpose |
 |----------|---------|
 | **Node.js 20+** | App runtime |
-| **Homebrew** | Setup uses it to install **Colima** and the Docker CLI (free — no Docker Desktop license) |
+| **Homebrew** | Setup uses it to install **Colima** and the Docker CLI |
 | **Git** | Clone and updates |
 
-On **`npm run setup`**, Next installs Colima + Docker CLI via Homebrew (if missing), starts Colima, and runs PostgreSQL in Docker. You do not install Postgres yourself or edit `.env`.
+On **`npm run setup`**, Next installs Colima + Docker CLI via Homebrew (if missing), starts Colima, and runs PostgreSQL in Docker.
 
-**macOS only for automatic Colima install.** Linux users: install Colima manually (`brew install colima docker docker-compose && colima start`) before setup, or see [docs/INSTALL.md](docs/INSTALL.md).
+## Configuration
 
-## Configuration (no `.env` editing required)
-
-A minimal `.env` is **auto-created** on first `npm run setup` or `npm run next`. You should not need to edit it.
-
-```env
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/next?schema=public"
-```
-
-Everything else is configured in the app:
+Webex, local mail/calendar, and additional settingas are configured in the app:
 
 | Setting | Where |
 |---------|--------|
@@ -104,9 +94,7 @@ Everything else is configured in the app:
 | Apple Mail/Calendar import | **Settings → Email** |
 | PST import, Whisper, poll secret | **Settings → Preferences → Advanced integrations** |
 
-Optional legacy `.env` overrides are documented in [.env.example](.env.example).
-
-**Advanced only:** set `NEXT_POSTGRES_BACKEND=native` for Homebrew Postgres without Colima — see [docs/INSTALL.md](docs/INSTALL.md).
+**Advanced only:** An existing Postgres database can be used without Colima — see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## npm scripts
 
@@ -122,15 +110,6 @@ Optional legacy `.env` overrides are documented in [.env.example](.env.example).
 | `npm run db:seed` | Seed ingestion policies |
 | `npm run db:reset` | Wipe DB tables and re-seed (destructive) |
 | `npm test` | Run unit tests |
-
-## Local database lifecycle
-
-Postgres runs **only while needed**:
-
-- **`npm run next`** — Docker Postgres starts if needed; **stops when you quit** the dev server (if this session started it). Data stays in the Docker volume.
-- **`npm run setup`** / **`db:*` commands** — start Postgres temporarily for the command. Setup stops Postgres when finished.
-- **`npm run uninstall`** — removes Docker volume **or** `.local/pgdata`, plus encryption key.
-- **`npm run db:reset`** — wipe tables but keep the volume; complete `/setup` again.
 
 ## Project structure
 
@@ -164,7 +143,7 @@ scripts/
 
 ## Privacy
 
-Ingestion is **opt-in per source**. You must explicitly allowlist Webex spaces and email rules before any data is pulled. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for guardrails.
+Ingestion is **opt-in per source**. You must explicitly allowlist Webex spaces and email rules before any data is pulled. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for guardrails. All SLM/LLM work is done locally, no need for API-driven connections.
 
 ## License
 
