@@ -7,27 +7,15 @@ This guide is for a **fresh install** — cloning [github.com/briansak/next](htt
 | Requirement | Notes |
 |-------------|--------|
 | **Node.js 20+** | [nodejs.org](https://nodejs.org) |
-| **Postgres runtime** | **Required** — see options below (no Docker Desktop license needed) |
+| **Homebrew** | Setup installs **Colima** + Docker CLI automatically (no Docker Desktop license) |
 | **Git** | To clone and receive updates |
 | **(Optional) Ollama** | Local AI summaries — configure in Settings → Preferences |
 
-### Postgres runtime (pick one — both free for organizations)
+You do **not** install PostgreSQL yourself or edit `.env` for a normal install. Setup runs:
 
-**Option A — Colima + Docker CLI** (same `docker-compose.yml`, no Docker Desktop):
-
-```bash
-brew install colima docker docker-compose
-colima start
-```
-
-**Option B — Homebrew PostgreSQL** (no containers; project data in `.local/pgdata`):
-
-```bash
-brew install postgresql@16
-brew link postgresql@16 --force
-```
-
-Setup **auto-detects** which runtime to use. Force one with `NEXT_POSTGRES_BACKEND=docker` or `NEXT_POSTGRES_BACKEND=native`.
+1. `brew install colima docker docker-compose` (if missing)
+2. `colima start` (if not running)
+3. `docker compose up` for Postgres, then stops it when setup finishes
 
 ---
 
@@ -55,11 +43,12 @@ npm run setup
 
 This will:
 
-1. **Verify a Postgres runtime** is available (Colima/Docker or Homebrew Postgres)
-2. **Create `.env`** automatically with the correct local URL (if `.env` doesn’t exist)
-3. Run **`npm ci`** — install dependencies
-4. **Start Postgres briefly**, apply schema (`db:push`), seed policies (`db:seed`)
-5. **Stop Postgres** — it stays off until you run the app
+1. **Install Colima and Docker CLI** via Homebrew (if not already installed)
+2. **Start Colima** (if not running)
+3. **Create `.env`** automatically (if `.env` doesn’t exist)
+4. Run **`npm ci`** — install dependencies
+5. **Start Postgres** in Docker, apply schema (`db:push`), seed policies (`db:seed`)
+6. **Stop Postgres** — it stays off until you run the app
 
 You do **not** need to copy `.env.example` or edit Webex credentials in a file.
 
@@ -69,7 +58,7 @@ You do **not** need to copy `.env.example` or edit Webex credentials in a file.
 npm run next
 ```
 
-- Postgres starts on demand (Colima/Docker or native `.local/pgdata`)
+- Postgres starts on demand (Colima + Docker Compose)
 - Your browser opens to [http://localhost:3000](http://localhost:3000)
 - **First launch:** complete the setup questionnaire at `/setup`
 - **After setup:** you go straight to **My Priorities** (`/dashboard`)
@@ -109,7 +98,7 @@ Apple Mail/Calendar: [APPLE_MAIL_CALENDAR_GETTING_STARTED.md](./APPLE_MAIL_CALEN
 
 ## Local database lifecycle
 
-Postgres runs **only while the app or a db command needs it**. Your data **persists** between runs in a Docker volume or `.local/pgdata`.
+Postgres runs **only while the app or a db command needs it**. Your data **persists** between runs in the Docker volume `next_pgdata`.
 
 | Action | Command | Postgres | Data |
 |--------|---------|----------|------|
@@ -117,7 +106,7 @@ Postgres runs **only while the app or a db command needs it**. Your data **persi
 | First install | `npm run setup` | Starts briefly, then stops | Created |
 | Schema update | `npm run db:push` | Starts for command | Kept |
 | Wipe app data | `npm run db:reset` | Starts for command | Tables wiped, volume kept |
-| Full remove | `npm run uninstall` | Stops backend + deletes data dir/volume | **All DB data gone** |
+| Full remove | `npm run uninstall` | Container + volume removed | **All DB data gone** |
 
 **Advanced only:** set `NEXT_MANAGE_POSTGRES=false` and your own `DATABASE_URL` if you run Postgres outside Docker (not supported for normal installs).
 
@@ -133,7 +122,7 @@ npm run uninstall
 
 This removes:
 
-- Postgres data (Docker volume **or** `.local/pgdata`)
+- Docker Postgres container and **database volume**
 - `.local/` encryption key (Webex client secret storage)
 
 It keeps the project folder and `.env`. To reinstall:
@@ -175,10 +164,10 @@ Encryption key for stored secrets: auto-created at `.local/encryption.key` (or s
 
 ## Manual setup (without `npm run setup`)
 
-Requires a Postgres runtime:
+Requires Colima/Docker:
 
 ```bash
-node scripts/postgres.mjs check
+node scripts/ensure-colima.mjs
 npm ci
 node scripts/ensure-env.mjs          # create .env if missing
 node scripts/postgres.mjs ensure
@@ -201,7 +190,27 @@ Use a managed PostgreSQL instance, set `DATABASE_URL`, and set `NEXT_MANAGE_POST
 
 ---
 
-## Advanced: external PostgreSQL (not recommended)
+## Advanced: native Postgres without Colima
+
+If you cannot use Colima/Docker, set in `.env`:
+
+```env
+NEXT_POSTGRES_BACKEND=native
+```
+
+Then install Postgres binaries:
+
+```bash
+brew install postgresql@16
+brew link postgresql@16 --force
+npm run setup
+```
+
+Next stores data in `.local/pgdata` on port **5433** (not Docker). `npm run uninstall` removes that directory.
+
+---
+
+## Advanced: external PostgreSQL
 
 If you cannot use Docker, set in `.env`:
 
@@ -218,12 +227,11 @@ You must install, run, and back up Postgres yourself. `npm run uninstall` will *
 
 | Problem | Fix |
 |---------|-----|
-| `No Postgres runtime found` | Install Colima (`brew install colima docker docker-compose && colima start`) **or** Homebrew Postgres (`brew install postgresql@16`) |
-| `Docker is installed but not running` | Run `colima start` (or start your container runtime) |
-| `Port 5432 is already in use` | Another Postgres on 5432 — stop it (`brew services stop postgresql@16`) or use native backend (`NEXT_POSTGRES_BACKEND=native`) |
-| `PostgreSQL binaries not found` | `brew install postgresql@16 && brew link postgresql@16 --force` |
-| `EALLOWSCRIPTS` during `npm ci` / setup | npm 11+ with `allow-scripts` in your user `~/.npmrc` — run `git pull` for latest `allowScripts` in `package.json`, or remove `allow-scripts=…` from `~/.npmrc` |
-| `Can't reach database server` | Start Docker Desktop, then run `npm run next` (starts Postgres automatically) |
+| `Homebrew is required` | Install Homebrew from [brew.sh](https://brew.sh), then re-run `npm run setup` |
+| `Colima started but Docker did not become ready` | Run `colima stop && colima start`, then `npm run setup` |
+| `Port 5432 is already in use` | Stop other Postgres on 5432: `brew services stop postgresql@16` |
+| `EALLOWSCRIPTS` during `npm ci` / setup | Run `git pull` for latest `allowScripts` in `package.json`, or remove `allow-scripts=…` from `~/.npmrc` |
+| `Can't reach database server` | Run `colima start`, then `npm run next` |
 | Stuck on setup / schema errors | `npm run db:reset` then complete `/setup` again |
 | Webex connect button missing | Save Client ID and secret in **Settings → Webex**, then Connect |
 | `redirect_uri_mismatch` | Redirect URI in developer.webex.com must match **Settings → Webex** exactly |

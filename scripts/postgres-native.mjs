@@ -159,13 +159,11 @@ export function assertNativePostgresReady() {
       [
         "PostgreSQL binaries not found.",
         "",
-        "Install Postgres via Homebrew (free — no Docker license):",
+        "Advanced setup only. Set NEXT_POSTGRES_BACKEND=native in .env, then:",
         "  brew install postgresql@16",
         "  brew link postgresql@16 --force",
         "",
-        "Or use a free container runtime with the existing docker-compose setup:",
-        "  brew install colima docker docker-compose",
-        "  colima start",
+        "See docs/INSTALL.md — Advanced: native Postgres without Colima.",
       ].join("\n")
     );
   }

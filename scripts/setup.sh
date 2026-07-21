@@ -20,9 +20,9 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
   exit 1
 fi
 
-if [ "${NEXT_MANAGE_POSTGRES:-}" != "false" ]; then
-  echo "==> Checking Postgres runtime"
-  node scripts/postgres.mjs check
+if [ "${NEXT_MANAGE_POSTGRES:-}" != "false" ] && [ "${NEXT_POSTGRES_BACKEND:-docker}" != "native" ]; then
+  echo "==> Postgres runtime (Colima + Docker CLI)"
+  node scripts/ensure-colima.mjs
   echo ""
 fi
 
@@ -36,7 +36,7 @@ fi
 echo "==> Installing dependencies (npm ci)"
 npm ci
 
-echo "==> Starting PostgreSQL"
+echo "==> Starting PostgreSQL (docker compose)"
 node scripts/postgres.mjs ensure
 
 echo "==> Applying database schema"

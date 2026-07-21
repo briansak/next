@@ -89,15 +89,12 @@ export function assertDockerReady() {
   if (!dockerBinaryExists()) {
     throw new Error(
       [
-        "Docker is required for Next.",
+        "Docker is not available.",
         "",
-        "Install a free container runtime, then run setup again:",
+        "Setup installs Colima automatically when Homebrew is present.",
+        "If setup did not finish, run:",
         "  brew install colima docker docker-compose",
         "  colima start",
-        "",
-        "Or install local Postgres binaries (no containers):",
-        "  brew install postgresql@16 && brew link postgresql@16 --force",
-        "  NEXT_POSTGRES_BACKEND=native npm run setup",
       ].join("\n")
     );
   }

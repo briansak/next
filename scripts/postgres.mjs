@@ -2,13 +2,12 @@
 /**
  * Unified Postgres lifecycle for Next.
  *
- * Backends (NEXT_POSTGRES_BACKEND):
- *   auto   — Docker/Colima if available, else project-local Postgres in .local/pgdata (default)
- *   docker — docker-compose.yml on localhost:5432
- *   native — .local/pgdata via pg_ctl on localhost:5433 (no Docker license)
+ * Default: Colima/Docker via docker-compose.yml on localhost:5432.
+ * Advanced: NEXT_POSTGRES_BACKEND=native for Homebrew pg_ctl (.local/pgdata).
  */
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ensureColima } from "./ensure-colima.mjs";
 import { ensureEnvFile } from "./ensure-env.mjs";
 import {
   assertDockerReady,
@@ -20,7 +19,6 @@ import {
 import {
   assertNativePostgresReady,
   ensureNativePostgres,
-  hasNativePostgresBinaries,
   NATIVE_DATABASE_URL,
   removeNativePostgresData,
   stopNativePostgres,
@@ -32,18 +30,14 @@ export const DOCKER_DATABASE_URL =
   "postgresql://postgres:postgres@localhost:5432/next?schema=public";
 
 export function getPostgresBackendPreference() {
-  const value = (process.env.NEXT_POSTGRES_BACKEND ?? "auto").trim().toLowerCase();
-  if (value === "docker" || value === "native" || value === "auto") return value;
-  return "auto";
+  const value = (process.env.NEXT_POSTGRES_BACKEND ?? "docker").trim().toLowerCase();
+  if (value === "docker" || value === "native") return value;
+  return "docker";
 }
 
 export function resolvePostgresBackend() {
-  const preference = getPostgresBackendPreference();
-  if (preference === "docker") return "docker";
-  if (preference === "native") return "native";
-  if (hasDocker()) return "docker";
-  if (hasNativePostgresBinaries()) return "native";
-  return null;
+  if (getPostgresBackendPreference() === "native") return "native";
+  return "docker";
 }
 
 export function getDefaultDatabaseUrl(backend = resolvePostgresBackend()) {
@@ -51,44 +45,20 @@ export function getDefaultDatabaseUrl(backend = resolvePostgresBackend()) {
   return DOCKER_DATABASE_URL;
 }
 
-export function assertPostgresPrerequisites() {
+export function usesColimaBackend() {
+  return isDockerPostgresManaged() && resolvePostgresBackend() === "docker";
+}
+
+export async function assertPostgresPrerequisites() {
   if (!isDockerPostgresManaged()) return;
 
-  const preference = getPostgresBackendPreference();
-  if (preference === "docker") {
-    assertDockerReady();
-    return;
-  }
-  if (preference === "native") {
+  if (resolvePostgresBackend() === "native") {
     assertNativePostgresReady();
     return;
   }
 
-  const backend = resolvePostgresBackend();
-  if (backend === "docker") {
-    assertDockerReady();
-    return;
-  }
-  if (backend === "native") {
-    assertNativePostgresReady();
-    return;
-  }
-
-  throw new Error(
-    [
-      "No Postgres runtime found.",
-      "",
-      "Option A — free container runtime (same docker-compose.yml, no Docker Desktop license):",
-      "  brew install colima docker docker-compose",
-      "  colima start",
-      "",
-      "Option B — local Postgres binaries (no containers):",
-      "  brew install postgresql@16",
-      "  brew link postgresql@16 --force",
-      "",
-      "Then run: npm run setup",
-    ].join("\n")
-  );
+  await ensureColima();
+  assertDockerReady();
 }
 
 /**
@@ -102,9 +72,6 @@ export async function ensurePostgres() {
 
   await ensureEnvFile();
   const backend = resolvePostgresBackend();
-  if (!backend) {
-    assertPostgresPrerequisites();
-  }
 
   if (backend === "native") {
     process.env.DATABASE_URL = NATIVE_DATABASE_URL;
@@ -112,6 +79,7 @@ export async function ensurePostgres() {
     return { startedByUs: result.startedByUs, backend: "native" };
   }
 
+  await ensureColima();
   process.env.DATABASE_URL = DOCKER_DATABASE_URL;
   const result = await ensureDockerPostgres();
   return { startedByUs: result.startedByUs, backend: "docker" };
@@ -120,8 +88,7 @@ export async function ensurePostgres() {
 export async function stopManagedPostgres() {
   if (!isDockerPostgresManaged()) return;
 
-  const backend = resolvePostgresBackend();
-  if (backend === "native") {
+  if (resolvePostgresBackend() === "native") {
     await stopNativePostgres();
     return;
   }
@@ -160,9 +127,8 @@ const command = process.argv[2];
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
     if (command === "check") {
-      assertPostgresPrerequisites();
-      const backend = resolvePostgresBackend();
-      console.log(`Postgres backend: ${backend ?? "external"}`);
+      await assertPostgresPrerequisites();
+      console.log(`Postgres backend: ${resolvePostgresBackend()}`);
     } else if (command === "ensure") {
       await ensurePostgres();
     } else if (command === "stop") {
