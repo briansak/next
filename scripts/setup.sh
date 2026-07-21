@@ -33,6 +33,17 @@ else
   echo "Using existing .env"
 fi
 
+if ! node -e "const p=require('./package.json'); if(!p.allowScripts||!Object.keys(p.allowScripts).length) process.exit(1)"; then
+  echo "Error: this checkout is missing package.json allowScripts (npm 11+ required)."
+  echo "Run: git pull origin main"
+  exit 1
+fi
+
+if [ ! -f scripts/npm-ci.sh ]; then
+  echo "Error: scripts/npm-ci.sh is missing. Run: git pull origin main"
+  exit 1
+fi
+
 echo "==> Installing dependencies (npm ci)"
 bash scripts/npm-ci.sh
 
