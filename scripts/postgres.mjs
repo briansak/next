@@ -15,6 +15,7 @@ import {
   resolvePostgresBackend,
 } from "./postgres-config.mjs";
 import { ensureColima } from "./ensure-colima.mjs";
+import { runDockerComposeSync } from "./docker-compose.mjs";
 import { ensureEnvFile } from "./ensure-env.mjs";
 import {
   assertDockerReady,
@@ -96,8 +97,7 @@ export async function removeManagedPostgresData() {
   let removed = false;
 
   if (hasDocker()) {
-    const { spawnSync } = await import("node:child_process");
-    const result = spawnSync("docker", ["compose", "-f", COMPOSE_FILE, "down", "-v"], {
+    const result = runDockerComposeSync(COMPOSE_FILE, ["down", "-v"], {
       cwd: ROOT,
       stdio: "inherit",
     });

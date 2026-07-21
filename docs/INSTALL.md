@@ -230,6 +230,8 @@ You must install, run, and back up Postgres yourself. `npm run uninstall` will *
 | `Homebrew is required` | Install Homebrew from [brew.sh](https://brew.sh), then re-run `npm run setup` |
 | `Colima started but Docker did not become ready` | Run `colima stop && colima start`, then `npm run setup` |
 | `Port 5432 is already in use` | Stop other Postgres on 5432: `brew services stop postgresql@16` |
+| `unknown shorthand flag: 'f' in -f` | Old Docker CLI without `docker compose` plugin — run `git pull` (uses `docker-compose` automatically) |
+| `docker-credential-desktop` not found | Leftover Docker Desktop config — run `git pull`; setup uses an isolated Colima docker config |
 | `EALLOWSCRIPTS` during `npm ci` / setup | Often caused by `NPM_CONFIG_ALLOW_SCRIPTS` in your shell (mirroring `~/.npmrc`). Setup clears it automatically — run `git pull` and retry. Or remove `export NPM_CONFIG_ALLOW_SCRIPTS=…` from `.zshrc` / `.bashrc`. |
 | `Can't reach database server` | Run `colima start`, then `npm run next` |
 | Stuck on setup / schema errors | `npm run db:reset` then complete `/setup` again |

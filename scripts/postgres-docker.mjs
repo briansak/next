@@ -6,12 +6,17 @@
  * Default install requires Docker Desktop — no manual Postgres or .env editing.
  * Set NEXT_MANAGE_POSTGRES=false only for advanced external-database setups.
  */
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_DATABASE_URL } from "./postgres-config.mjs";
 import { ensureEnvFile } from "./ensure-env.mjs";
+import {
+  getDockerComposeRunner,
+  runDockerCompose,
+  runDockerComposeSync,
+} from "./docker-compose.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const COMPOSE_FILE = path.join(ROOT, "docker-compose.yml");
@@ -66,12 +71,11 @@ export function hasDocker() {
 function isOurPostgresContainerRunning() {
   if (!hasDocker()) return false;
 
-  const list = spawnSync(
-    "docker",
-    ["compose", "-f", COMPOSE_FILE, "ps", "-q", "db"],
-    { cwd: ROOT, encoding: "utf8", env: process.env }
-  );
-  const containerId = list.stdout?.trim();
+  const list = runDockerComposeSync(COMPOSE_FILE, ["ps", "-q", "db"], {
+    cwd: ROOT,
+    stdio: "pipe",
+  });
+  const containerId = list.stdout?.toString().trim();
   if (!containerId || list.status !== 0) return false;
 
   const inspect = spawnSync(
@@ -104,10 +108,13 @@ export function assertDockerReady() {
       [
         "Docker is installed but not running.",
         "",
-        "Start Docker Desktop, wait until it is ready, then run setup again.",
+        "Start Colima: colima start",
+        "Then run setup again.",
       ].join("\n")
     );
   }
+
+  getDockerComposeRunner();
 }
 
 function portConflictMessage() {
@@ -137,19 +144,8 @@ function checkTcp(host, port, timeoutMs = 2000) {
   });
 }
 
-function runDockerCompose(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("docker", ["compose", "-f", COMPOSE_FILE, ...args], {
-      cwd: ROOT,
-      stdio: "inherit",
-      env: process.env,
-    });
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`docker compose ${args.join(" ")} failed (${code})`));
-    });
-  });
+function runCompose(args) {
+  return runDockerCompose(COMPOSE_FILE, args, { cwd: ROOT });
 }
 
 async function isPostgresReachable(databaseUrl) {
@@ -203,7 +199,7 @@ export async function ensurePostgres() {
   }
 
   console.log("Starting local Postgres (docker compose)…");
-  await runDockerCompose(["up", "-d", "db"]);
+  await runCompose(["up", "-d", "db"]);
 
   if (!(await waitForPostgres(databaseUrl))) {
     throw new Error("Timed out waiting for Postgres to accept connections on localhost:5432.");
@@ -223,7 +219,7 @@ export async function stopManagedPostgres() {
 
   console.log("\nStopping local Postgres…");
   try {
-    await runDockerCompose(["stop", "db"]);
+    await runCompose(["stop", "db"]);
   } catch {
     // Best effort on shutdown.
   }
