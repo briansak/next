@@ -17,8 +17,6 @@ const COMPOSE_FILE = path.join(ROOT, "docker-compose.yml");
 const DEFAULT_DATABASE_URL =
   "postgresql://postgres:postgres@localhost:5432/next?schema=public";
 
-const DOCKER_INSTALL_URL = "https://www.docker.com/products/docker-desktop/";
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -57,7 +55,7 @@ function dockerBinaryExists() {
   return result.status === 0;
 }
 
-function hasDocker() {
+export function hasDocker() {
   const result = spawnSync("docker", ["info"], {
     stdio: "ignore",
     env: process.env,
@@ -93,10 +91,13 @@ export function assertDockerReady() {
       [
         "Docker is required for Next.",
         "",
-        "Install Docker Desktop, then run setup again:",
-        `  ${DOCKER_INSTALL_URL}`,
+        "Install a free container runtime, then run setup again:",
+        "  brew install colima docker docker-compose",
+        "  colima start",
         "",
-        "Next uses Docker to run PostgreSQL locally — no separate database install or .env editing.",
+        "Or install local Postgres binaries (no containers):",
+        "  brew install postgresql@16 && brew link postgresql@16 --force",
+        "  NEXT_POSTGRES_BACKEND=native npm run setup",
       ].join("\n")
     );
   }

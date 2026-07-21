@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const result = spawnSync("node", ["scripts/postgres-docker.mjs", "ensure"], {
+const result = spawnSync("node", ["scripts/postgres.mjs", "ensure"], {
   cwd: ROOT,
   stdio: "inherit",
   env: process.env,

@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ensureEnvFile } from "./ensure-env.mjs";
-import { ensurePostgres, stopManagedPostgres } from "./postgres-docker.mjs";
+import { ensurePostgres, stopManagedPostgres } from "./postgres.mjs";
 
 process.title = "next";
 

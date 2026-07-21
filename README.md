@@ -17,7 +17,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full design.
 
 ## Quick start (new install)
 
-**Prerequisites:** Node.js 20+, **Docker Desktop**, Git.
+**Prerequisites:** Node.js 20+, **Postgres runtime** (see below — no Docker Desktop license required), Git.
 
 ```bash
 git clone git@github.com:briansak/next.git
@@ -28,7 +28,7 @@ npm run next
 
 That’s it for a first run:
 
-1. **`npm run setup`** — checks Docker, installs dependencies, auto-creates `.env`, starts Postgres in Docker briefly, applies schema, seeds policies, then stops Postgres.
+1. **`npm run setup`** — checks for a Postgres runtime, installs dependencies, auto-creates `.env`, starts Postgres briefly, applies schema, seeds policies, then stops Postgres.
 2. **`npm run next`** — starts Postgres on demand, opens your browser, runs the dev server. On first launch you complete the setup questionnaire; afterward you land on **My Priorities**.
 
 Configure Webex, Ollama, and everything else in **Settings** — not in `.env`.
@@ -70,7 +70,7 @@ Then either run `npm run setup` for a fresh install, or delete the project folde
 ## Stack
 
 - Next.js 15 + TypeScript
-- PostgreSQL + Prisma (bundled via Docker Compose — no separate DB install)
+- PostgreSQL + Prisma (bundled via Colima/Docker **or** `.local/pgdata` — no Docker Desktop license)
 - Local heuristics engine (Ollama optional)
 - No login — first-launch setup questionnaire
 
@@ -79,14 +79,32 @@ Then either run `npm run setup` for a fresh install, or delete the project folde
 | Required | Purpose |
 |----------|---------|
 | **Node.js 20+** | App runtime |
-| **Docker Desktop** | Runs PostgreSQL locally — started/stopped automatically by Next |
+| **Postgres runtime** | Database — auto-detected; see options below |
 | **Git** | Clone and updates |
 
-You do **not** install PostgreSQL yourself or edit `.env` for a normal setup.
+You do **not** install PostgreSQL manually, edit `.env`, or pay for Docker Desktop.
+
+### Postgres runtime (pick one — both free for organizations)
+
+**Option A — Colima + Docker CLI** (uses included `docker-compose.yml`):
+
+```bash
+brew install colima docker docker-compose
+colima start
+```
+
+**Option B — Homebrew PostgreSQL** (no containers; data in `.local/pgdata`):
+
+```bash
+brew install postgresql@16
+brew link postgresql@16 --force
+```
+
+Setup auto-detects: Colima/Docker if `docker info` works, otherwise Homebrew Postgres. Force a backend with `NEXT_POSTGRES_BACKEND=docker` or `NEXT_POSTGRES_BACKEND=native`.
 
 ## Configuration (no `.env` editing required)
 
-A minimal `.env` is **auto-created** on first `npm run setup` or `npm run next` with the Docker Postgres URL. You should not need to edit it.
+A minimal `.env` is **auto-created** on first `npm run setup` or `npm run next` with the correct URL for your Postgres backend. You should not need to edit it.
 
 ```env
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/next?schema=public"
@@ -127,7 +145,7 @@ Postgres runs **only while needed**:
 
 - **`npm run next`** — Docker Postgres starts if needed; **stops when you quit** the dev server (if this session started it). Data stays in the Docker volume.
 - **`npm run setup`** / **`db:*` commands** — start Postgres temporarily for the command. Setup stops Postgres when finished.
-- **`npm run uninstall`** — `docker compose down -v` removes the volume (all app data gone).
+- **`npm run uninstall`** — removes Docker volume **or** `.local/pgdata`, plus encryption key.
 - **`npm run db:reset`** — wipe tables but keep the volume; complete `/setup` again.
 
 ## Project structure
@@ -153,7 +171,9 @@ scripts/
 ├── setup.sh          # First-time setup
 ├── update.sh         # Git pull + deps + schema
 ├── uninstall.mjs     # Remove local DB volume + secrets
-├── postgres-docker.mjs  # On-demand Postgres start/stop
+├── postgres.mjs         # Postgres backend router (Docker/Colima or native)
+├── postgres-docker.mjs  # docker-compose Postgres
+├── postgres-native.mjs  # .local/pgdata via pg_ctl
 └── dev-server.mjs    # npm run next
 ```
 

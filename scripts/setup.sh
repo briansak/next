@@ -21,8 +21,8 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
 fi
 
 if [ "${NEXT_MANAGE_POSTGRES:-}" != "false" ]; then
-  echo "==> Checking Docker (required for local Postgres)"
-  node scripts/postgres-docker.mjs check-docker
+  echo "==> Checking Postgres runtime"
+  node scripts/postgres.mjs check
   echo ""
 fi
 
@@ -36,8 +36,8 @@ fi
 echo "==> Installing dependencies (npm ci)"
 npm ci
 
-echo "==> Starting PostgreSQL (docker compose, on demand)"
-node scripts/postgres-docker.mjs ensure
+echo "==> Starting PostgreSQL"
+node scripts/postgres.mjs ensure
 
 echo "==> Applying database schema"
 npm run db:push
@@ -47,7 +47,7 @@ npm run db:seed
 
 if [ "${NEXT_MANAGE_POSTGRES:-}" != "false" ]; then
   echo "==> Stopping PostgreSQL until you run npm run next"
-  node scripts/postgres-docker.mjs stop || true
+  node scripts/postgres.mjs stop || true
 fi
 
 echo ""
