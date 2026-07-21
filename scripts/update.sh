@@ -39,7 +39,7 @@ echo "==> Merging latest changes (fast-forward preferred)"
 git merge --ff-only "$UPSTREAM/$BRANCH" 2>/dev/null || git pull "$UPSTREAM" "$BRANCH"
 
 echo "==> Installing dependencies (npm ci)"
-npm ci
+bash scripts/npm-ci.sh
 
 echo "==> Applying database schema changes"
 npm run db:push

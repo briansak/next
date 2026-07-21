@@ -34,7 +34,7 @@ else
 fi
 
 echo "==> Installing dependencies (npm ci)"
-npm ci
+bash scripts/npm-ci.sh
 
 echo "==> Starting PostgreSQL (docker compose)"
 node scripts/postgres.mjs ensure
