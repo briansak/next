@@ -9,13 +9,14 @@ import { access, mkdir, rm } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { NATIVE_DATABASE_URL, NATIVE_PG_PORT } from "./postgres-config.mjs";
+
+export { NATIVE_DATABASE_URL, NATIVE_PG_PORT };
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCAL_DIR = path.join(ROOT, ".local");
 const PGDATA = path.join(LOCAL_DIR, "pgdata");
 const PGLOG = path.join(LOCAL_DIR, "postgres.log");
-export const NATIVE_PG_PORT = 5433;
-export const NATIVE_DATABASE_URL = `postgresql://postgres@127.0.0.1:${NATIVE_PG_PORT}/next?schema=public`;
 
 const BIN_CANDIDATES = [
   process.env.PG_BIN_DIR,

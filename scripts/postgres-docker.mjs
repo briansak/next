@@ -10,12 +10,12 @@ import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { DOCKER_DATABASE_URL } from "./postgres-config.mjs";
 import { ensureEnvFile } from "./ensure-env.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const COMPOSE_FILE = path.join(ROOT, "docker-compose.yml");
-const DEFAULT_DATABASE_URL =
-  "postgresql://postgres:postgres@localhost:5432/next?schema=public";
+const DEFAULT_DATABASE_URL = DOCKER_DATABASE_URL;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

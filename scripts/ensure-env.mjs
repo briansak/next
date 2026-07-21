@@ -6,6 +6,7 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { getDefaultDatabaseUrl, resolvePostgresBackend } from "./postgres-config.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_PATH = path.join(ROOT, ".env");
@@ -50,7 +51,6 @@ async function loadExistingEnv() {
 
 export async function ensureEnvFile() {
   if (!(await fileExists(ENV_PATH))) {
-    const { getDefaultDatabaseUrl, resolvePostgresBackend } = await import("./postgres.mjs");
     const databaseUrl = getDefaultDatabaseUrl(resolvePostgresBackend());
     await writeFile(ENV_PATH, envTemplate(databaseUrl), { mode: 0o600 });
     console.log("Created .env with default DATABASE_URL for local Postgres.");
@@ -59,11 +59,19 @@ export async function ensureEnvFile() {
   await loadExistingEnv();
 
   if (!process.env.DATABASE_URL?.trim()) {
-    const { getDefaultDatabaseUrl, resolvePostgresBackend } = await import("./postgres.mjs");
     process.env.DATABASE_URL = getDefaultDatabaseUrl(resolvePostgresBackend());
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await ensureEnvFile();
+function isMainModule() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return import.meta.url === pathToFileURL(path.resolve(entry)).href;
+}
+
+if (isMainModule()) {
+  ensureEnvFile().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
 }

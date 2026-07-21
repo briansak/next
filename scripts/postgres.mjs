@@ -7,6 +7,13 @@
  */
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  DOCKER_DATABASE_URL,
+  getDefaultDatabaseUrl,
+  getPostgresBackendPreference,
+  NATIVE_DATABASE_URL,
+  resolvePostgresBackend,
+} from "./postgres-config.mjs";
 import { ensureColima } from "./ensure-colima.mjs";
 import { ensureEnvFile } from "./ensure-env.mjs";
 import {
@@ -19,31 +26,19 @@ import {
 import {
   assertNativePostgresReady,
   ensureNativePostgres,
-  NATIVE_DATABASE_URL,
   removeNativePostgresData,
   stopNativePostgres,
 } from "./postgres-native.mjs";
 
+export {
+  DOCKER_DATABASE_URL,
+  getDefaultDatabaseUrl,
+  getPostgresBackendPreference,
+  resolvePostgresBackend,
+};
+
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const COMPOSE_FILE = path.join(ROOT, "docker-compose.yml");
-export const DOCKER_DATABASE_URL =
-  "postgresql://postgres:postgres@localhost:5432/next?schema=public";
-
-export function getPostgresBackendPreference() {
-  const value = (process.env.NEXT_POSTGRES_BACKEND ?? "docker").trim().toLowerCase();
-  if (value === "docker" || value === "native") return value;
-  return "docker";
-}
-
-export function resolvePostgresBackend() {
-  if (getPostgresBackendPreference() === "native") return "native";
-  return "docker";
-}
-
-export function getDefaultDatabaseUrl(backend = resolvePostgresBackend()) {
-  if (backend === "native") return NATIVE_DATABASE_URL;
-  return DOCKER_DATABASE_URL;
-}
 
 export function usesColimaBackend() {
   return isDockerPostgresManaged() && resolvePostgresBackend() === "docker";
