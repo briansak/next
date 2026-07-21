@@ -5,6 +5,7 @@ import {
   detectSpokenReferences,
   textMentionsAlias,
   textReferencesAlias,
+  viewerMentionedInText,
 } from "./mentions";
 
 describe("mentions", () => {
@@ -14,8 +15,24 @@ describe("mentions", () => {
     email: "brian.sak@example.com",
   };
 
+  const brsak = {
+    id: "user-2",
+    name: "Brian Sak",
+    email: "brsak@cisco.com",
+  };
+
   it("builds aliases from name and email", () => {
     const aliases = buildMentionAliases(brian.name, brian.email);
+    expect(aliases).toContain("Brian Sak");
+    expect(aliases).toContain("Brian");
+    expect(aliases).toContain("brian.sak@example.com");
+    expect(aliases.some((alias) => alias.toLowerCase() === "brian sak")).toBe(true);
+  });
+
+  it("builds aliases for cisco email local part and full address", () => {
+    const aliases = buildMentionAliases(brsak.name, brsak.email);
+    expect(aliases).toContain("brsak@cisco.com");
+    expect(aliases).toContain("brsak");
     expect(aliases).toContain("Brian Sak");
     expect(aliases).toContain("Brian");
   });
@@ -30,10 +47,28 @@ describe("mentions", () => {
     expect(textMentionsAlias("Hey @Brianna update the doc", "Brian")).toBe(false);
   });
 
+  it("detects full-email @mentions", () => {
+    expect(
+      textMentionsAlias("Looping in @brsak@cisco.com for review", "brsak@cisco.com")
+    ).toBe(true);
+    expect(
+      viewerMentionedInText("Looping in @brsak@cisco.com for review", brsak)
+    ).toBe(true);
+  });
+
+  it("detects @brian sak style mentions", () => {
+    expect(
+      viewerMentionedInText("@brian sak can you take this?", brsak)
+    ).toBe(true);
+    expect(
+      viewerMentionedInText("@brian can you take this?", brsak)
+    ).toBe(true);
+  });
+
   it("detects mentions for team members", () => {
     const matches = detectMentions(
       "@Brian Sak please send the WWT update",
-      [brian, { id: "user-2", name: "Jane Doe", email: "jane@example.com" }]
+      [brian, { id: "user-3", name: "Jane Doe", email: "jane@example.com" }]
     );
     expect(matches).toHaveLength(1);
     expect(matches[0].userId).toBe("user-1");

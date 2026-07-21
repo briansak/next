@@ -6,7 +6,9 @@ import {
   importFromAppleMail,
   importOutlookArchive,
 } from "@/lib/integrations/email/ingest";
-import { requireAdmin } from "@/lib/tenant";
+
+/** Apple Mail import runs find + sqlite; allow up to 2 minutes. */
+export const maxDuration = 120;
 
 const MAX_EML_FILES = 50;
 
@@ -16,21 +18,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  try {
-    requireAdmin({
-      tenantId: session.tenantId,
-      userId: session.userId,
-      role: session.role,
-    });
-  } catch {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
   const form = await request.formData();
   const mode = form.get("mode")?.toString();
 
   if (mode === "apple-mail") {
-    const result = await importFromAppleMail(session.tenantId);
+    const result = await importFromAppleMail();
     return NextResponse.json({
       ok: result.errors.length === 0 || result.imported > 0,
       ...result,
@@ -38,7 +30,7 @@ export async function POST(request: Request) {
   }
 
   if (mode === "apple-calendar") {
-    const result = await importFromAppleCalendar(session.tenantId);
+    const result = await importFromAppleCalendar();
     return NextResponse.json({
       ok: result.errors.length === 0 || result.imported > 0,
       ...result,
@@ -64,11 +56,7 @@ export async function POST(request: Request) {
     }
 
     const buffer = Buffer.from(await archive.arrayBuffer());
-    const result = await importOutlookArchive(
-      session.tenantId,
-      archive.name,
-      buffer
-    );
+    const result = await importOutlookArchive(archive.name, buffer);
     return NextResponse.json({ ok: result.errors.length === 0, ...result });
   }
 
@@ -91,7 +79,7 @@ export async function POST(request: Request) {
     files.push({ name, content: await entry.text() });
   }
 
-  const result = await importEmlFiles(session.tenantId, files);
+  const result = await importEmlFiles(files);
   return NextResponse.json({ ok: true, ...result });
 }
 

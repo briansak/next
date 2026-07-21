@@ -9,28 +9,57 @@ export interface MentionMatch {
   alias: string;
 }
 
+const MIN_ALIAS_LENGTH = 2;
+
 /** Build @mention aliases from a user's display name and email. */
 export function buildMentionAliases(
   name: string | null | undefined,
   email: string
 ): string[] {
-  const aliases = new Set<string>();
-  const trimmed = name?.trim();
+  const nameAliases = new Set<string>();
+  const emailAliases = new Set<string>();
+  const normalizedEmail = email.trim().toLowerCase();
 
-  if (trimmed) {
-    aliases.add(trimmed);
-    const parts = trimmed.split(/\s+/).filter(Boolean);
-    if (parts[0] && parts[0].length >= 2) {
-      aliases.add(parts[0]);
+  if (normalizedEmail.includes("@")) {
+    emailAliases.add(normalizedEmail);
+
+    const localPart = normalizedEmail.split("@")[0] ?? "";
+    if (localPart.length >= MIN_ALIAS_LENGTH) {
+      emailAliases.add(localPart);
+    }
+
+    const localSpaced = localPart.replace(/[._-]+/g, " ").trim();
+    if (
+      localSpaced.length >= MIN_ALIAS_LENGTH &&
+      localSpaced !== localPart
+    ) {
+      emailAliases.add(localSpaced);
     }
   }
 
-  const localPart = email.split("@")[0]?.replace(/[._]/g, " ").trim();
-  if (localPart && localPart.length >= 2) {
-    aliases.add(localPart);
+  const trimmed = name?.trim();
+  if (trimmed) {
+    nameAliases.add(trimmed);
+
+    const parts = trimmed.split(/\s+/).filter(Boolean);
+    if (parts[0] && parts[0].length >= MIN_ALIAS_LENGTH) {
+      nameAliases.add(parts[0]);
+    }
   }
 
-  return [...aliases].sort((a, b) => b.length - a.length);
+  const byLength = (a: string, b: string) => b.length - a.length;
+  const ordered = [
+    ...[...nameAliases].sort(byLength),
+    ...[...emailAliases].sort(byLength),
+  ];
+
+  const seen = new Set<string>();
+  return ordered.filter((alias) => {
+    const key = alias.toLowerCase();
+    if (seen.has(key) || alias.length < MIN_ALIAS_LENGTH) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Returns which team members are @mentioned in the message text. */
@@ -54,13 +83,24 @@ export function textMentionsAlias(text: string, alias: string): boolean {
   if (!alias || !text.includes("@")) return false;
 
   const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`@${escaped}(?![\\w])`, "i");
+  const pattern = new RegExp(`@${escaped}(?![\\w@])`, "i");
   return pattern.test(text);
+}
+
+/** True when the viewer's name or email appears as an @mention in text. */
+export function viewerMentionedInText(
+  text: string | undefined | null,
+  viewer: MentionUser
+): boolean {
+  if (!text?.includes("@")) return false;
+
+  const aliases = buildMentionAliases(viewer.name, viewer.email);
+  return aliases.some((alias) => textMentionsAlias(text, alias));
 }
 
 /** Spoken name reference in transcript or prose (no @ prefix). */
 export function textReferencesAlias(text: string, alias: string): boolean {
-  if (!alias || alias.length < 2) return false;
+  if (!alias || alias.length < MIN_ALIAS_LENGTH) return false;
 
   const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`\\b${escaped}\\b`, "i").test(text);
@@ -88,9 +128,14 @@ export function detectSpokenReferences(
 
 export function viewerIsMentioned(
   mentionedUserIds: string[] | undefined,
-  viewerId: string
+  viewerId: string,
+  options?: { text?: string | null; viewer?: MentionUser }
 ): boolean {
-  return mentionedUserIds?.includes(viewerId) ?? false;
+  if (mentionedUserIds?.includes(viewerId)) return true;
+  if (options?.text && options.viewer?.id === viewerId) {
+    return viewerMentionedInText(options.text, options.viewer);
+  }
+  return false;
 }
 
 /** Personal priority boost when the logged-in user is @mentioned. */

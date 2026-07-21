@@ -1,3 +1,4 @@
+import { mergeCommunicationMetadata } from "@/lib/communications/viewer-override";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@prisma/client";
 import type { EmailMessage } from "./allowlist";
@@ -16,8 +17,7 @@ export interface ProductAnnouncementIngestResult {
 }
 
 export async function tryIngestProductAnnouncementEmail(
-  tenantId: string,
-  parsed: EmailMessage
+    parsed: EmailMessage
 ): Promise<ProductAnnouncementIngestResult> {
   const announcement = parseProductAnnouncementEmail(parsed);
   if (!announcement) {
@@ -26,7 +26,6 @@ export async function tryIngestProductAnnouncementEmail(
 
   const existing = await prisma.communication.findFirst({
     where: {
-      tenantId,
       externalId: announcement.messageId,
       source: "EMAIL",
     },
@@ -37,7 +36,7 @@ export async function tryIngestProductAnnouncementEmail(
     return { handled: true, created: false, id: existing.id };
   }
 
-  const id = await upsertProductAnnouncement(tenantId, announcement, existing?.id);
+  const id = await upsertProductAnnouncement( announcement, existing?.id);
 
   return {
     handled: true,
@@ -48,10 +47,30 @@ export async function tryIngestProductAnnouncementEmail(
 }
 
 async function upsertProductAnnouncement(
-  tenantId: string,
-  announcement: ProductAnnouncementContent,
+    announcement: ProductAnnouncementContent,
   existingId?: string
 ): Promise<string> {
+  let existingMetadata: unknown;
+  if (existingId) {
+    const existing = await prisma.communication.findUnique({
+      where: { id: existingId },
+      select: { metadata: true },
+    });
+    existingMetadata = existing?.metadata;
+  }
+
+  const metadata = mergeCommunicationMetadata(existingMetadata, {
+    productAnnouncement: true,
+    fromProductEmail: true,
+    productName: announcement.productName,
+    productVersion: announcement.productVersion,
+    vendor: announcement.vendor,
+    technologyLabel: announcement.technologyLabel,
+    announcementSummary: announcement.summary,
+    learnMoreUrl: announcement.learnMoreUrl,
+    messageId: announcement.messageId,
+  });
+
   const data = {
     subject: announcement.subject,
     body: announcement.bodyText,
@@ -64,17 +83,7 @@ async function upsertProductAnnouncement(
     priorityScore: 1,
     priorityReasons: [`${announcement.technologyLabel} product announcement`],
     tags: ["product-announcement", "technology-announcement", "email"],
-    metadata: {
-      productAnnouncement: true,
-      fromProductEmail: true,
-      productName: announcement.productName,
-      productVersion: announcement.productVersion,
-      vendor: announcement.vendor,
-      technologyLabel: announcement.technologyLabel,
-      announcementSummary: announcement.summary,
-      learnMoreUrl: announcement.learnMoreUrl,
-      messageId: announcement.messageId,
-    } as Prisma.InputJsonValue,
+    metadata: metadata as Prisma.InputJsonValue,
   };
 
   if (existingId) {
@@ -88,7 +97,6 @@ async function upsertProductAnnouncement(
 
   const communication = await prisma.communication.create({
     data: {
-      tenantId,
       source: "EMAIL",
       externalId: announcement.messageId,
       ...data,
@@ -106,15 +114,13 @@ export interface BackfillProductAnnouncementsResult {
 }
 
 export async function backfillProductAnnouncements(
-  tenantId: string
-): Promise<BackfillProductAnnouncementsResult> {
+  ): Promise<BackfillProductAnnouncementsResult> {
   const since = new Date(
     Date.now() - PRODUCT_ANNOUNCEMENT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
   );
 
   const candidates = await prisma.communication.findMany({
     where: {
-      tenantId,
       source: "EMAIL",
       receivedAt: { gte: since },
       NOT: { tags: { has: "product-announcement" } },
@@ -138,7 +144,7 @@ export async function backfillProductAnnouncements(
 
   for (const row of candidates) {
     const meta = (row.metadata ?? {}) as { threadId?: string };
-    const result = await tryIngestProductAnnouncementEmail(tenantId, {
+    const result = await tryIngestProductAnnouncementEmail( {
       messageId: row.externalId,
       subject: row.subject ?? "",
       body: row.body,

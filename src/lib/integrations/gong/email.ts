@@ -4,6 +4,7 @@ export interface GongEmailContent {
   messageId: string;
   meetingTitle: string;
   summary: string;
+  transcript: string;
   actionItems: string[];
   replayUrl: string | null;
   receivedAt: Date;
@@ -118,15 +119,17 @@ export function parseGongEmail(parsed: ParsedEml): GongEmailContent | null {
     extractMeetingTitleFromBody(plainBody) ??
     extractMeetingTitleFromGongSubject(parsed.subject);
   const summary = extractGongSummary(plainBody);
+  const transcript = extractGongTranscript(plainBody);
   const actionItems = extractGongActionItems(plainBody);
   const replayUrl = extractGongReplayUrl(plainBody);
 
-  if (!meetingTitle && !summary) return null;
+  if (!meetingTitle && !summary && !transcript) return null;
 
   return {
     messageId: parsed.messageId,
     meetingTitle: meetingTitle || parsed.subject,
     summary,
+    transcript,
     actionItems,
     replayUrl,
     receivedAt: parsed.receivedAt,
@@ -182,6 +185,24 @@ function extractMeetingTitleFromBody(body: string): string | null {
     if (match?.[1]?.trim()) return match[1].trim();
   }
   return null;
+}
+
+function extractGongTranscript(body: string): string {
+  const sectionPatterns = [
+    /(?:^|\n)\s*(?:Full )?Transcript\s*:?\s*\n([\s\S]*?)(?=\n\s*(?:Action items?|Next steps?|Key topics|Attendees|Participants|View (?:call|recording)|Summary|Overview|https?:\/\/|$))/i,
+    /(?:^|\n)\s*Conversation\s*:?\s*\n([\s\S]*?)(?=\n\s*(?:Action items?|Next steps?|Summary|View (?:call|recording)|https?:\/\/|$))/i,
+    /(?:^|\n)\s*Call transcript\s*:?\s*\n([\s\S]*?)(?=\n\s*(?:Action items?|Next steps?|Summary|View (?:call|recording)|https?:\/\/|$))/i,
+  ];
+
+  for (const pattern of sectionPatterns) {
+    const match = body.match(pattern);
+    const text = match?.[1]?.trim();
+    if (text && text.length >= 120) {
+      return cleanSummaryText(text).slice(0, 12_000);
+    }
+  }
+
+  return "";
 }
 
 function extractGongSummary(body: string): string {

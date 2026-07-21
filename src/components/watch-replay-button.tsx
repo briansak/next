@@ -5,8 +5,9 @@ interface WatchReplayButtonProps {
 }
 
 function buttonLabel(platform?: string | null): string {
-  if (!platform) return "Watch Replay";
-  return `Watch on ${platform}`;
+  if (!platform) return "View replay";
+  if (platform === "Cisco" || platform === "SharePoint") return "View on Bridge";
+  return `View on ${platform}`;
 }
 
 export function WatchReplayButton({
@@ -14,28 +15,14 @@ export function WatchReplayButton({
   platform,
   size = "md",
 }: WatchReplayButtonProps) {
-  const padding = size === "sm" ? "0.3rem 0.65rem" : "0.45rem 0.9rem";
-  const fontSize = size === "sm" ? "0.78rem" : "0.85rem";
+  const sizeClass = size === "sm" ? "btn--sm" : "btn--md";
 
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "0.35rem",
-        fontSize,
-        color: "#fff",
-        background: "var(--accent)",
-        fontWeight: 600,
-        textDecoration: "none",
-        padding,
-        borderRadius: 8,
-        lineHeight: 1.2,
-        whiteSpace: "nowrap",
-      }}
+      className={`btn btn--primary ${sizeClass}`}
     >
       <span aria-hidden style={{ fontSize: "0.95em" }}>
         ▶

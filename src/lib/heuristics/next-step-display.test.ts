@@ -100,6 +100,21 @@ describe("formatNextStepCardDisplay", () => {
     expect(card.headline).toBe('Respond — @mentioned in “AI Defense Oracle Cloud roadmap”');
     expect(card.summary).toBeNull();
   });
+
+  it("shows manual description as summary when there is no communication", () => {
+    const card = formatNextStepCardDisplay({
+      title: "CFP for Cisco Live 2026",
+      status: "OPEN",
+      dueAt: new Date("2026-08-04T17:00:00Z"),
+      description:
+        "Submit 400-word abstract and speaker bio. Due Aug 4, 2026.",
+      communication: null,
+    });
+
+    expect(card.summary?.text).toContain("abstract");
+    expect(card.summary?.source).toBe("manual");
+    expect(card.meta).toContain("Manual");
+  });
 });
 
 describe("formatNextStepMeta", () => {

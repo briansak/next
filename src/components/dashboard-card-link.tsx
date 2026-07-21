@@ -1,79 +1,101 @@
 import Link from "next/link";
+import { priorityAccentClass } from "@/components/ui/chip";
 
 interface DashboardCardLinkProps {
   id: string;
   children: React.ReactNode;
   highlighted?: boolean;
+  priority?: string;
+  /** Rendered outside the card link (e.g. external recording URLs). */
+  footer?: React.ReactNode;
+  showLinkHint?: boolean;
+}
+
+function cardClass(highlighted: boolean, priority?: string): string {
+  const classes = ["card"];
+  if (highlighted) classes.push("card--highlighted");
+  const accentClass = priority ? priorityAccentClass(priority) : null;
+  if (accentClass) classes.push(accentClass);
+  return classes.join(" ");
 }
 
 export function DashboardCardLink({
   id,
   children,
   highlighted = false,
+  priority,
+  footer,
+  showLinkHint = false,
 }: DashboardCardLinkProps) {
   return (
-    <Link
-      href={`/dashboard/${id}`}
-      className="dashboard-card-link"
-      style={{
-        display: "block",
-        textDecoration: "none",
-        color: "inherit",
-        padding: "0.75rem",
-        background: highlighted ? "rgba(91, 143, 239, 0.08)" : "var(--bg)",
-        borderRadius: 8,
-        border: highlighted ? "1px solid var(--accent)" : "1px solid var(--border)",
-      }}
-    >
-      {children}
-      <span
-        style={{
-          display: "inline-block",
-          marginTop: "0.5rem",
-          fontSize: "0.72rem",
-          color: "var(--accent)",
-          fontWeight: 500,
-        }}
+    <div className={cardClass(highlighted, priority)}>
+      <Link
+        href={`/dashboard/${id}`}
+        className={footer ? "card__link card__link--with-footer" : "card__link"}
       >
-        View full content →
-      </span>
-    </Link>
+        {children}
+        {showLinkHint ? (
+          <span
+            style={{
+              display: "inline-block",
+              marginTop: "0.5rem",
+              fontSize: "0.72rem",
+              color: "var(--accent)",
+              fontWeight: 500,
+            }}
+          >
+            View full content →
+          </span>
+        ) : null}
+      </Link>
+      {footer ? <div className="card__footer">{footer}</div> : null}
+    </div>
   );
 }
 
 interface DashboardPlanningCardLinkProps {
   id: string;
   children: React.ReactNode;
+  priority?: string;
+  showLinkHint?: boolean;
 }
 
 export function DashboardPlanningCardLink({
   id,
   children,
+  priority,
+  showLinkHint = false,
 }: DashboardPlanningCardLinkProps) {
+  const classes = ["card", priority ? priorityAccentClass(priority) : ""]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <Link
       href={`/dashboard/${id}`}
-      className="dashboard-card-link"
+      className={classes}
       style={{
         display: "block",
         textDecoration: "none",
         color: "inherit",
-        padding: "0.75rem",
-        paddingBottom: "0.5rem",
+        padding: "var(--space-3)",
+        paddingBottom: "var(--space-2)",
       }}
     >
       {children}
-      <span
-        style={{
-          display: "inline-block",
-          marginTop: "0.5rem",
-          fontSize: "0.72rem",
-          color: "var(--accent)",
-          fontWeight: 500,
-        }}
-      >
-        View full event →
-      </span>
+      {showLinkHint ? (
+        <span
+          style={{
+            display: "inline-block",
+            marginTop: "0.5rem",
+            fontSize: "0.72rem",
+            color: "var(--accent)",
+            fontWeight: 500,
+          }}
+        >
+          View full event →
+        </span>
+      ) : null}
     </Link>
   );
 }

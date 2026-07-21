@@ -2,12 +2,12 @@
 
 ## Overview
 
-Next is a multi-tenant web application that ingests **explicitly allowlisted** communications (Webex Spaces, Email), summarizes them with local heuristics (and optionally a local Ollama instance), and helps teams collaborate on prioritized next steps.
+Next is a **single-user local** web application that ingests **explicitly allowlisted** communications (Webex Spaces, Email), summarizes them with local heuristics (and optionally a local Ollama instance), and helps you prioritize next steps for partner coverage.
 
 ## Design principles
 
-1. **Opt-in ingestion only** — Nothing is pulled unless a tenant admin configures it. Personal inboxes and unrelated spaces are never touched.
-2. **Tenant isolation** — All data is scoped by `tenantId`. Cross-tenant access is impossible at the query layer.
+1. **Opt-in ingestion only** — Nothing is pulled unless you configure it. Personal inboxes and unrelated spaces are never touched.
+2. **Local-first** — One user account owns all data on your machine. No tenant isolation layer.
 3. **Heuristics first** — Rule-based prioritization ships in MVP. LLM summarization is an optional enhancement via local Ollama.
 4. **Auditability** — Every ingested item records its source, allowlist rule, and ingestion timestamp.
 
@@ -17,33 +17,27 @@ Next is a multi-tenant web application that ingests **explicitly allowlisted** c
 |-------|--------|-----------|
 | Framework | Next.js 15 (App Router) | Full-stack TypeScript, API routes, SSR for dashboard |
 | Language | TypeScript | Shared types across UI, API, and integrations |
-| Database | PostgreSQL | Relational model fits tenants, allowlists, threads |
+| Database | PostgreSQL | Relational model for allowlists, threads, and user preferences |
 | ORM | Prisma | Schema-first, migrations, type-safe queries |
 | Auth | Email/password (MVP) → IdP later | Simple sessions; SSO migration path |
 | Jobs | Inngest or cron (MVP) | Background sync for Webex spaces and email |
-| LLM (optional) | Ollama (local HTTP) | No cloud dependency; tenant-controlled |
+| LLM (optional) | Ollama (local HTTP) | No cloud dependency; user-controlled |
 
 Stack can change if integration complexity or scale demands it (e.g. dedicated worker service).
 
-## Multi-tenancy model
+## Data model (single user)
 
 ```
-Organization (Tenant)
-├── Users (members with roles: admin, member, viewer)
-├── Partner (the external entity this team covers)
+User (one account per install)
+├── partnerName, appConfig, dashboard preferences
 ├── IngestionPolicies (allowlists)
 │   ├── WebexSpaceAllowlist — space IDs explicitly enabled
 │   └── EmailAllowlist — addresses, domains, or shared mailbox rules
+├── IntegrationTokens (Webex OAuth, etc.)
 ├── Communications (ingested messages)
 ├── Summaries (heuristic or LLM-generated)
-└── NextSteps (collaborative action items)
+└── NextSteps (action items)
 ```
-
-### Roles
-
-- **Admin** — Configure ingestion policies, manage members, connect integrations
-- **Member** — View communications, create/update next steps, assign owners
-- **Viewer** — Read-only access to summaries and next steps
 
 ### Privacy & ingestion guardrails
 
@@ -51,12 +45,12 @@ Ingestion **never** runs without an active `IngestionPolicy`:
 
 | Source | Allowlist mechanism | Blocked by default |
 |--------|---------------------|-------------------|
-| Webex | Space ID list per tenant | All spaces |
+| Webex | Space ID list on your policies | All spaces |
 | Email | Shared mailbox + sender/domain filters | Personal inboxes, unmatched senders |
 
 Additional safeguards:
 
-- Policies require admin approval before first sync
+- Policies require explicit enable before first sync
 - Dry-run mode: preview what would be ingested before enabling
 - `sourceRef` on every `Communication` links back to the matching allowlist rule
 - PII minimization: store message excerpts, not full attachments, in MVP
@@ -67,7 +61,7 @@ Additional safeguards:
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │ Webex API   │────▶│ Ingestion Worker │────▶│ Communications  │
 │ Microsoft   │────▶│ Ingestion Worker │────▶│ Communications  │
-│ 365 Graph   │     │ (policy-gated)   │     │ (tenant-scoped) │
+│ 365 Graph   │     │ (policy-gated)   │     │ Communications  │
 └─────────────┘     └──────────────────┘     └────────┬────────┘
                                                       │
                       ┌──────────────────┐            ▼
@@ -106,43 +100,51 @@ Output: `priority` (1–5), `suggestedAction`, `extractedDeadline`, `tags[]`.
 - Poll or webhook for messages in **allowlisted space IDs only**
 - Normalize to `Communication` with `source: WEBEX`, `threadId`, `author`, `body`, `timestamp`
 
-### Email (Microsoft 365)
+### Email (file import and Apple Mail)
 
-- OAuth 2.0 via Azure AD app registration
-- Graph API `Mail.Read` / `Mail.Read.Shared` on a **shared partner mailbox**
-- Filter by `EmailAllowlist` (from address, domain, subject prefix)
+- Import `.eml`, `.zip`, `.pst`, `.mbox`, and `.ics` from Settings → Ingestion
+- Optional Apple Mail / Apple Calendar sync on Mac (`ENABLE_APPLE_MAIL_IMPORT`, `ENABLE_APPLE_CALENDAR_IMPORT`)
+- Filter by `EmailAllowlist` (from address, domain, subject prefix) for partner priority boosts
 - Normalize to `Communication` with `source: EMAIL`, `messageId`, `subject`, `body`, `timestamp`
-- Personal inboxes must never be configured as the shared mailbox
 
-## Pilot tenant
+## Initial setup (seed)
 
-**World Wide Technology (WWT)** is the initial pilot tenant (`slug: wwt`):
+Run `npm run setup` (or `npm run db:seed`) after install. Customize via `.env`:
+
+- `SEED_PARTNER_NAME` — default partner org label (e.g. WWT)
+- `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`
+
+The seed creates one local user, default partner email rules (`@wwt.com`, `[WWT]`), and a DRAFT Webex policy. Configure spaces and rules in Settings.
+
+Install and update guides: [INSTALL.md](./INSTALL.md), [UPDATING.md](./UPDATING.md).
+
+## Example partner (WWT)
 
 - Partner: World Wide Technology
 - Default email allowlist: `@wwt.com` domain and `[WWT]` subject prefix
 - Webex policy seeded in DRAFT — spaces must be explicitly added
-- Run `npm run db:seed` to create tenant and admin user
+- Run `npm run db:seed` to create the local admin user
 
 ## API surface (planned)
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /api/communications` | List prioritized communications for tenant |
-| `GET /api/next-steps` | Collaborative next steps board |
+| `GET /api/communications` | List prioritized communications |
+| `GET /api/next-steps` | Next steps board |
 | `POST /api/next-steps` | Create/update next step |
-| `GET/POST /api/ingestion-policies` | Manage allowlists (admin) |
-| `POST /api/ingestion/sync` | Trigger manual sync (admin) |
+| `GET/POST /api/ingestion-policies` | Manage allowlists |
+| `POST /api/ingestion/sync` | Trigger manual sync |
 
 ## Deployment (future)
 
 - App: Vercel, Railway, or self-hosted Docker
 - DB: Managed PostgreSQL
 - Workers: Separate process or Inngest for ingestion jobs
-- Ollama: Runs on tenant infra or shared internal host
+- Ollama: Runs locally on your laptop
 
 ## MVP milestones
 
-1. **Foundation** — Repo, schema, tenant model, auth stub
+1. **Foundation** — Repo, schema, single-user auth, local install
 2. **Ingestion policies** — CRUD for Webex space and email allowlists
 3. **Webex connector** — OAuth + poll allowlisted spaces
 4. **Email connector** — IMAP/API with sender filters

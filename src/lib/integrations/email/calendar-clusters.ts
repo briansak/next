@@ -74,8 +74,7 @@ function applyKindTags(tags: string[], eventKind: string): string[] {
 }
 
 async function upsertMissingTravelNextStep(
-  tenantId: string,
-  communicationId: string,
+    communicationId: string,
   subject: string,
   eventStart: Date,
   priority: Priority
@@ -84,7 +83,6 @@ async function upsertMissingTravelNextStep(
 
   const existing = await prisma.nextStep.findFirst({
     where: {
-      tenantId,
       communicationId,
       status: "OPEN",
       OR: [
@@ -99,7 +97,6 @@ async function upsertMissingTravelNextStep(
 
   await prisma.nextStep.create({
     data: {
-      tenantId,
       communicationId,
       title,
       priority: priority === "CRITICAL" || priority === "HIGH" ? "HIGH" : "MEDIUM",
@@ -110,12 +107,10 @@ async function upsertMissingTravelNextStep(
 }
 
 async function closeResolvedTravelNextSteps(
-  tenantId: string,
-  communicationId: string
+    communicationId: string
 ): Promise<number> {
   const closed = await prisma.nextStep.updateMany({
     where: {
-      tenantId,
       communicationId,
       status: "OPEN",
       title: { contains: "book travel", mode: "insensitive" },
@@ -133,15 +128,13 @@ export interface ReconcileCalendarClustersResult {
 }
 
 export async function reconcileCalendarEventClusters(
-  tenantId: string
-): Promise<ReconcileCalendarClustersResult> {
+  ): Promise<ReconcileCalendarClustersResult> {
   const since = new Date();
   const until = new Date();
   until.setDate(until.getDate() + CLUSTER_LOOKAHEAD_DAYS);
 
   const rows = await prisma.communication.findMany({
     where: {
-      tenantId,
       source: "OUTLOOK_CALENDAR",
       receivedAt: { gte: since, lte: until },
       tags: { has: "calendar" },
@@ -238,7 +231,6 @@ export async function reconcileCalendarEventClusters(
 
     if (assignment.eventKind === "conference" && assignment.missingTravel) {
       await upsertMissingTravelNextStep(
-        tenantId,
         row.id,
         row.subject ?? "Upcoming event",
         row.receivedAt,
@@ -248,7 +240,7 @@ export async function reconcileCalendarEventClusters(
     }
 
     if (assignment.eventKind === "conference" && !assignment.missingTravel) {
-      resolvedTravelSteps += await closeResolvedTravelNextSteps(tenantId, row.id);
+      resolvedTravelSteps += await closeResolvedTravelNextSteps( row.id);
     }
   }
 

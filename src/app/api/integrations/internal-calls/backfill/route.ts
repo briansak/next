@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
-import { syncEmailMessages } from "@/lib/integrations/email/ingest";
-import { backfillInternalCallReplays } from "@/lib/integrations/internal-calls/replay-ingest";
+import { runEmailBackfills } from "@/lib/integrations/email/ingest";
 
 export async function POST() {
   const session = await getAuthSession();
@@ -10,18 +9,10 @@ export async function POST() {
   }
 
   try {
-    const backfill = await backfillInternalCallReplays(session.tenantId);
-    const email = await syncEmailMessages(session.tenantId).catch((err) => ({
-      error: err instanceof Error ? err.message : "Sync failed",
-      ingested: 0,
-      fetched: 0,
-      skipped: 0,
-    }));
-
+    const backfill = await runEmailBackfills();
     return NextResponse.json({
       ok: true,
       backfill,
-      email,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Backfill failed";

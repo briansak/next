@@ -24,7 +24,6 @@ const PLANNING_KEYWORDS = [
   /\bcoordination\b/i,
   /\bstrategy\b/i,
   /\breview\b/i,
-  /\[WWT\]/i,
 ];
 
 const ROUTINE_TITLE_PATTERNS = [
@@ -64,6 +63,7 @@ export interface CalendarPlanningInput {
   isRecurring?: boolean;
   isAllDay?: boolean;
   partnerDomains?: string[];
+  partnerSubjectPrefixes?: string[];
   now?: Date;
 }
 
@@ -104,13 +104,17 @@ export function isNonPlanningCalendarEvent(tags: string[]): boolean {
   return tags.includes("calendar-hold") || tags.includes("routine");
 }
 
-export function hasPlanningSignals(text: string): boolean {
-  return PLANNING_KEYWORDS.some((pattern) => pattern.test(text));
+export function hasPlanningSignals(
+  text: string,
+  subjectPrefixes: string[] = []
+): boolean {
+  if (PLANNING_KEYWORDS.some((pattern) => pattern.test(text))) return true;
+  return subjectPrefixes.some((prefix) => text.includes(prefix));
 }
 
 function externalAttendeeEmails(
   attendees: string[],
-  partnerDomains: string[] = ["wwt.com"]
+  partnerDomains: string[] = []
 ): string[] {
   return attendees.filter((email) => {
     const domain = email.split("@")[1]?.toLowerCase();
@@ -142,7 +146,7 @@ export function analyzeCalendarEvent(
   );
   const multiParty =
     input.attendeeEmails.length >= 2 || externalAttendees.length >= 1;
-  const planningKeywords = hasPlanningSignals(text);
+  const planningKeywords = hasPlanningSignals(text, input.partnerSubjectPrefixes);
   const routine = isRoutineCalendarTitle(input.summary);
   const calendarHold = isCalendarHoldTitle(input.summary, input.description);
   const longEvent = durationMinutes >= 90;

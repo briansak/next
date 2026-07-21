@@ -23,6 +23,26 @@ export function priorityToScore(priority: Priority): number {
   return PRIORITY_SCORES[priority];
 }
 
+export function parseDashboardHiddenCommunicationIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0))];
+}
+
+export function addDashboardHiddenCommunicationId(
+  ids: string[],
+  communicationId: string
+): string[] {
+  if (ids.includes(communicationId)) return ids;
+  return [...ids, communicationId];
+}
+
+export function removeDashboardHiddenCommunicationId(
+  ids: string[],
+  communicationId: string
+): string[] {
+  return ids.filter((id) => id !== communicationId);
+}
+
 export function getViewerOverride(
   metadata: unknown,
   userId: string
@@ -31,11 +51,42 @@ export function getViewerOverride(
   return meta.viewerOverrides?.[userId] ?? null;
 }
 
+export function isCommunicationHiddenFromDashboard(
+  metadata: unknown,
+  userId: string,
+  communicationId: string,
+  hiddenCommunicationIds?: string[] | null
+): boolean {
+  if (hiddenCommunicationIds?.includes(communicationId)) return true;
+  return getViewerOverride(metadata, userId)?.hidden === true;
+}
+
+export function mergeCommunicationMetadata(
+  existingMetadata: unknown,
+  incomingMetadata: Record<string, unknown>
+): Record<string, unknown> {
+  const existing = (existingMetadata ?? {}) as CommunicationMetadataWithOverrides;
+  const merged = { ...incomingMetadata };
+
+  if (
+    existing.viewerOverrides &&
+    Object.keys(existing.viewerOverrides).length > 0
+  ) {
+    merged.viewerOverrides = existing.viewerOverrides;
+  }
+
+  return merged;
+}
+
 export function applyViewerPriorityOverride(
   baseScore: number,
   basePriority: Priority,
   metadata: unknown,
-  userId: string
+  userId: string,
+  options?: {
+    communicationId?: string;
+    hiddenCommunicationIds?: string[] | null;
+  }
 ): {
   score: number;
   priority: Priority;
@@ -43,6 +94,19 @@ export function applyViewerPriorityOverride(
   overridden: boolean;
 } {
   const override = getViewerOverride(metadata, userId);
+  const hiddenByPreference =
+    options?.communicationId &&
+    options.hiddenCommunicationIds?.includes(options.communicationId);
+
+  if (hiddenByPreference) {
+    return {
+      score: override?.priorityScore ?? PRIORITY_SCORES.INFO,
+      priority: override?.priority ?? "INFO",
+      hidden: true,
+      overridden: true,
+    };
+  }
+
   if (!override) {
     return {
       score: baseScore,

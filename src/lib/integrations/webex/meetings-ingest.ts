@@ -1,11 +1,12 @@
 import { prisma } from "@/lib/db";
-import type { Priority } from "@prisma/client";
+import { mergeCommunicationMetadata } from "@/lib/communications/viewer-override";
+import type { Prisma, Priority } from "@prisma/client";
 import { analyzeCommunication } from "@/lib/heuristics";
 import {
   analyzeMeetingTranscript,
   mergeMeetingActionItems,
 } from "@/lib/heuristics/meeting-transcript";
-import { getTenantMembers } from "@/lib/tenant/members";
+import { getAppUserForMentions, getFirstUserId } from "@/lib/user/profile";
 import { getWebexAccessToken } from "./ingest";
 import { resolveMeetingIntelligence } from "./meeting-intelligence";
 import {
@@ -83,8 +84,7 @@ async function gatherMeetingsForTenant(
 }
 
 async function syncMeetingNextSteps(
-  tenantId: string,
-  communicationId: string,
+    communicationId: string,
   items: Array<{ title: string; assigneeUserIds: string[] }>,
   priority: Priority
 ): Promise<void> {
@@ -103,7 +103,6 @@ async function syncMeetingNextSteps(
 
     await prisma.nextStep.create({
       data: {
-        tenantId,
         communicationId,
         title,
         priority,
@@ -116,17 +115,18 @@ async function syncMeetingNextSteps(
 }
 
 export async function ingestWebexMeeting(
-  tenantId: string,
-  entry: MeetingWithContext,
+    entry: MeetingWithContext,
   accessToken: string,
   memberEmails: string[]
 ): Promise<{ created: boolean; id: string; skipped?: boolean }> {
   const { meeting, attributedToEmails } = entry;
   const enrichment = await enrichMeeting(accessToken, meeting);
+  const userId = await getFirstUserId();
   const intelligence = await resolveMeetingIntelligence(
     accessToken,
     meeting,
-    enrichment
+    enrichment,
+    userId ?? undefined
   );
 
   const enrichmentWithSummary = {
@@ -161,15 +161,21 @@ export async function ingestWebexMeeting(
     body += `\n\nTranscript excerpt:\n${excerpt}${intelligence.transcriptText.length > 1500 ? "…" : ""}`;
   }
   const receivedAt = new Date(meeting.end ?? meeting.start);
-  const teamMembers = await getTenantMembers(tenantId);
+  const teamMembers = await getAppUserForMentions();
 
   const transcriptAnalysis = analyzeMeetingTranscript(
     intelligence.transcriptText,
     teamMembers
   );
+  const transcriptItemsForMerge =
+    intelligence.summarySource === "heuristic" ||
+    intelligence.summarySource === "none"
+      ? transcriptAnalysis.actionItems
+      : [];
+
   const mergedActionItems = mergeMeetingActionItems(
     intelligence.summaryActionItems,
-    transcriptAnalysis.actionItems
+    transcriptItemsForMerge
   );
 
   const analysisBody = intelligence.transcriptText
@@ -196,7 +202,9 @@ export async function ingestWebexMeeting(
     reasons.push(
       intelligence.summarySource === "webex-ai"
         ? "Webex AI summary available"
-        : "AI summary generated from transcript"
+        : intelligence.summarySource === "ollama"
+          ? "AI summary generated from transcript"
+          : "Summary generated from transcript"
     );
   }
 
@@ -268,18 +276,24 @@ export async function ingestWebexMeeting(
     })),
     mentionedUserIds,
     transcriptText: intelligence.transcriptText
-      ? intelligence.transcriptText.slice(0, 4000)
+      ? intelligence.transcriptText.slice(0, 12_000)
       : undefined,
     transcriptSource: intelligence.transcriptSource,
     recordingDownloadUrl: intelligence.recordingDownloadUrl,
+    recordingPlaybackUrl: intelligence.recordingPlaybackUrl,
+    recordingId: intelligence.recordingId,
+    callHighlights: intelligence.callHighlights?.map((highlight) => ({
+      timestamp: highlight.timestamp,
+      startSeconds: highlight.startSeconds,
+      title: highlight.title,
+      description: highlight.description,
+    })),
     transcriptDownloadUrl: intelligence.transcriptDownloadUrl,
   };
 
   const existing = await prisma.communication.findUnique({
     where: {
-      tenantId_source_externalId: {
-        tenantId,
-        source: "WEBEX_MEETING",
+      source_externalId: { source: "WEBEX_MEETING",
         externalId: meeting.id,
       },
     },
@@ -300,7 +314,10 @@ export async function ingestWebexMeeting(
     priorityReasons: reasons,
     summary: intelligence.summaryText ?? analysis.summary,
     tags,
-    metadata,
+    metadata: mergeCommunicationMetadata(
+      existing?.metadata,
+      metadata
+    ) as Prisma.InputJsonValue,
   };
 
   if (existing) {
@@ -309,7 +326,6 @@ export async function ingestWebexMeeting(
       data,
     });
     await syncMeetingNextSteps(
-      tenantId,
       existing.id,
       mergedActionItems,
       analysis.priority
@@ -319,7 +335,6 @@ export async function ingestWebexMeeting(
 
   const communication = await prisma.communication.create({
     data: {
-      tenantId,
       source: "WEBEX_MEETING",
       externalId: meeting.id,
       threadId: meeting.id,
@@ -328,7 +343,6 @@ export async function ingestWebexMeeting(
   });
 
   await syncMeetingNextSteps(
-    tenantId,
     communication.id,
     mergedActionItems,
     analysis.priority
@@ -337,15 +351,13 @@ export async function ingestWebexMeeting(
   return { created: true, id: communication.id };
 }
 
-export async function syncWebexMeetings(
-  tenantId: string
-): Promise<MeetingSyncResult> {
-  const accessToken = await getWebexAccessToken(tenantId);
+export async function syncWebexMeetings(): Promise<MeetingSyncResult> {
+  const accessToken = await getWebexAccessToken();
   if (!accessToken) {
     throw new Error("Webex not connected");
   }
 
-  const members = await getTenantMembers(tenantId);
+  const members = await getAppUserForMentions();
   const memberEmails = members.map((m) => m.email);
   const connectorEmails = await getWebexConnectorEmails(accessToken);
 
@@ -377,7 +389,6 @@ export async function syncWebexMeetings(
   for (const entry of meetings) {
     try {
       const result = await ingestWebexMeeting(
-        tenantId,
         entry,
         accessToken,
         memberEmails

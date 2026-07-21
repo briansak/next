@@ -1,7 +1,6 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
-import type { MemberRole } from "@prisma/client";
 import {
   generateSessionToken,
   hashSessionToken,
@@ -14,11 +13,7 @@ export interface AuthSession {
   userId: string;
   email: string;
   name: string | null;
-  tenantId: string;
-  tenantName: string;
-  tenantSlug: string;
   partnerName: string | null;
-  role: MemberRole;
 }
 
 export async function createSession(userId: string): Promise<string> {
@@ -46,19 +41,7 @@ export const getAuthSession = cache(async (): Promise<AuthSession | null> => {
   const tokenHash = hashSessionToken(token);
   const session = await prisma.session.findUnique({
     where: { tokenHash },
-    include: {
-      user: {
-        include: {
-          memberships: {
-            include: {
-              tenant: { include: { partner: true } },
-            },
-            orderBy: { createdAt: "asc" },
-            take: 1,
-          },
-        },
-      },
-    },
+    include: { user: true },
   });
 
   if (!session || session.expiresAt < new Date()) {
@@ -68,18 +51,11 @@ export const getAuthSession = cache(async (): Promise<AuthSession | null> => {
     return null;
   }
 
-  const membership = session.user.memberships[0];
-  if (!membership) return null;
-
   return {
     userId: session.user.id,
     email: session.user.email,
     name: session.user.name,
-    tenantId: membership.tenantId,
-    tenantName: membership.tenant.name,
-    tenantSlug: membership.tenant.slug,
-    partnerName: membership.tenant.partner?.name ?? null,
-    role: membership.role,
+    partnerName: session.user.partnerName,
   };
 });
 

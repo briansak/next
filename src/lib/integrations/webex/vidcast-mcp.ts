@@ -209,7 +209,4 @@ export class VidcastMcpClient {
   }
 }
 
-export function parseVidcastShareId(url: string): string | null {
-  const match = url.match(/vidcast\.io\/share\/(?:embed\/)?([0-9a-f-]{36})/i);
-  return match?.[1] ?? null;
-}
+export { parseVidcastShareId } from "./vidcast-api";

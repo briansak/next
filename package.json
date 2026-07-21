@@ -2,16 +2,23 @@
   "name": "next",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "setup": "bash scripts/setup.sh",
+    "update": "bash scripts/update.sh",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
+    "db:reset": "prisma db push --force-reset && npm run db:seed",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
+    "db:reset-users": "tsx --env-file=.env scripts/reset-users.ts",
     "test": "vitest run",
     "poll": "tsx --env-file=.env scripts/poll-ingestion.ts",
     "poll:watch": "tsx --env-file=.env scripts/poll-ingestion.ts --watch",

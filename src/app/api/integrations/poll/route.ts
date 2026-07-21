@@ -3,8 +3,6 @@ import { getAuthSession } from "@/lib/auth";
 import {
   runIngestionPoll,
 } from "@/lib/ingestion/poll";
-import { requireAdmin } from "@/lib/tenant";
-
 function authorizedByCronSecret(request: Request): boolean {
   const secret = process.env.INGESTION_POLL_SECRET?.trim();
   if (!secret) return false;
@@ -22,12 +20,7 @@ export async function POST(request: Request) {
     }
 
     try {
-      requireAdmin({
-        tenantId: session.tenantId,
-        userId: session.userId,
-        role: session.role,
-      });
-    } catch {
+          } catch {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
   }

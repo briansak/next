@@ -2,14 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { requireAdmin, scopedToTenant } from "@/lib/tenant";
-
 const bodySchema = z.object({
   spaceId: z.string().min(1),
   spaceTitle: z.string().optional(),
   action: z.enum(["add", "remove"]),
-  purpose: z.enum(["PRIORITIES", "TECHNOLOGY"]).optional(),
+  purpose: z.enum(["PRIORITIES", "DEAL", "TECHNOLOGY"]).optional(),
   technologyLabel: z.string().max(80).optional(),
+  dealLabel: z.string().max(80).optional(),
 });
 
 export async function POST(request: Request) {
@@ -19,12 +18,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    requireAdmin({
-      tenantId: session.tenantId,
-      userId: session.userId,
-      role: session.role,
-    });
-  } catch {
+      } catch {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -33,12 +27,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const { spaceId, spaceTitle, action, purpose = "PRIORITIES", technologyLabel } =
-    parsed.data;
+  const {
+    spaceId,
+    spaceTitle,
+    action,
+    purpose = "PRIORITIES",
+    technologyLabel,
+    dealLabel,
+  } = parsed.data;
 
   const policy = await prisma.ingestionPolicy.findFirst({
     where: {
-      ...scopedToTenant(session.tenantId),
       source: "WEBEX",
     },
     include: { webexAllowlists: true },
@@ -58,6 +57,7 @@ export async function POST(request: Request) {
         purpose,
         technologyLabel:
           purpose === "TECHNOLOGY" ? technologyLabel?.trim() || null : null,
+        dealLabel: purpose === "DEAL" ? dealLabel?.trim() || null : null,
       },
       create: {
         policyId: policy.id,
@@ -66,6 +66,7 @@ export async function POST(request: Request) {
         purpose,
         technologyLabel:
           purpose === "TECHNOLOGY" ? technologyLabel?.trim() || null : null,
+        dealLabel: purpose === "DEAL" ? dealLabel?.trim() || null : null,
       },
     });
     return NextResponse.json({ ok: true, entry });
@@ -86,13 +87,14 @@ export async function GET(request: Request) {
 
   const purposeParam = new URL(request.url).searchParams.get("purpose");
   const purposeFilter =
-    purposeParam === "PRIORITIES" || purposeParam === "TECHNOLOGY"
+    purposeParam === "PRIORITIES" ||
+    purposeParam === "DEAL" ||
+    purposeParam === "TECHNOLOGY"
       ? purposeParam
       : undefined;
 
   const policy = await prisma.ingestionPolicy.findFirst({
     where: {
-      ...scopedToTenant(session.tenantId),
       source: "WEBEX",
     },
     include: {
@@ -103,9 +105,31 @@ export async function GET(request: Request) {
     },
   });
 
+  const allowlist = policy?.webexAllowlists ?? [];
+  const dedupedAllowlist = dedupeAllowlistBySpaceId(allowlist);
+
   return NextResponse.json({
     policyId: policy?.id ?? null,
     status: policy?.status ?? null,
-    allowlist: policy?.webexAllowlists ?? [],
+    allowlist: dedupedAllowlist,
   });
+}
+
+function dedupeAllowlistBySpaceId<
+  T extends { id: string; spaceId: string; createdAt?: Date }
+>(entries: T[]): T[] {
+  const bySpaceId = new Map<string, T>();
+  for (const entry of entries) {
+    const existing = bySpaceId.get(entry.spaceId);
+    if (!existing) {
+      bySpaceId.set(entry.spaceId, entry);
+      continue;
+    }
+    const existingTime = existing.createdAt?.getTime() ?? 0;
+    const nextTime = entry.createdAt?.getTime() ?? 0;
+    if (nextTime >= existingTime) {
+      bySpaceId.set(entry.spaceId, entry);
+    }
+  }
+  return [...bySpaceId.values()];
 }

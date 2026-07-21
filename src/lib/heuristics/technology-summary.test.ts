@@ -1,5 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { buildHeuristicTechnologySpaceSummary } from "./technology-summary";
+import {
+  buildHeuristicTechnologySpaceSummary,
+  pickTechnologySpaceForOllamaSummary,
+} from "./technology-summary";
+
+describe("pickTechnologySpaceForOllamaSummary", () => {
+  const spaces = [
+    { id: "allow-1", spaceId: "space-a" },
+    { id: "allow-2", spaceId: "space-b" },
+  ];
+
+  it("picks the space with the most messages by default", () => {
+    const counts = new Map([
+      ["space-a", 3],
+      ["space-b", 12],
+    ]);
+
+    expect(pickTechnologySpaceForOllamaSummary(spaces, counts)).toBe("space-b");
+  });
+
+  it("respects OLLAMA_TECHNOLOGY_SPACE_ID when set", () => {
+    const previous = process.env.OLLAMA_TECHNOLOGY_SPACE_ID;
+    process.env.OLLAMA_TECHNOLOGY_SPACE_ID = "allow-1";
+
+    const counts = new Map([
+      ["space-a", 3],
+      ["space-b", 12],
+    ]);
+
+    expect(pickTechnologySpaceForOllamaSummary(spaces, counts)).toBe("space-a");
+
+    if (previous === undefined) {
+      delete process.env.OLLAMA_TECHNOLOGY_SPACE_ID;
+    } else {
+      process.env.OLLAMA_TECHNOLOGY_SPACE_ID = previous;
+    }
+  });
+});
 
 describe("buildHeuristicTechnologySpaceSummary", () => {
   it("returns empty-state text when there are no messages", () => {

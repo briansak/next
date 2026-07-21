@@ -5,26 +5,34 @@ export {
   sourceLabel,
 } from "@/lib/format/display";
 
-export function PriorityBadge({ priority }: { priority: string }) {
-  const colors: Record<string, string> = {
-    CRITICAL: "var(--critical)",
-    HIGH: "var(--high)",
-    MEDIUM: "var(--medium)",
-    LOW: "var(--low)",
-    INFO: "var(--info)",
-  };
+export {
+  Chip,
+  priorityAccentClass,
+  priorityAccentColor,
+  priorityChipVariant,
+  type ChipVariant,
+} from "@/components/ui/chip";
 
+import { Chip, priorityChipVariant } from "@/components/ui/chip";
+
+export function PriorityBadge({ priority }: { priority: string }) {
   return (
-    <span
-      style={{
-        fontSize: "0.7rem",
-        fontWeight: 600,
-        color: colors[priority] ?? "var(--info)",
-        textTransform: "uppercase",
-        letterSpacing: "0.05em",
-      }}
-    >
+    <span className={`chip chip--priority chip--${priorityChipVariant(priority)}`}>
       {priority}
     </span>
   );
+}
+
+export function AttentionChip({ label = "Needs your reply" }: { label?: string }) {
+  return <Chip label={label} variant="accent" />;
+}
+
+export function MetaChip({
+  label,
+  variant = "default",
+}: {
+  label: string;
+  variant?: "default" | "accent" | "critical" | "high" | "medium" | "low" | "info";
+}) {
+  return <Chip label={label} variant={variant} />;
 }

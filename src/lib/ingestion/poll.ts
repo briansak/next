@@ -1,21 +1,20 @@
 import { prisma } from "@/lib/db";
+import { getAppConfig } from "@/lib/config/app-config-store";
+import { resolveAppConfig } from "@/lib/config/app-config";
+import { getFirstUserId } from "@/lib/user/profile";
 import {
   importFromAppleCalendar,
   importFromAppleMail,
-  syncEmailMessages,
+  runEmailBackfills,
 } from "@/lib/integrations/email/ingest";
-import { backfillInternalCallReplays } from "@/lib/integrations/internal-calls/replay-ingest";
 import { appleCalendarImportEnabled } from "@/lib/integrations/email/apple-calendar";
-import { correlateGongEmailsForTenant, gongEmailCorrelationEnabled } from "@/lib/integrations/gong/correlate";
+import { correlateGongEmails } from "@/lib/integrations/gong/correlate";
 import { appleMailImportEnabled } from "@/lib/integrations/email/apple-mail";
-import {
-  syncWebexMessages,
-} from "@/lib/integrations/webex/ingest";
+import { syncWebexMessages } from "@/lib/integrations/webex/ingest";
 import { syncWebexMeetings } from "@/lib/integrations/webex/meetings-ingest";
 import type { MeetingSyncResult } from "@/lib/integrations/webex/meetings-ingest";
 
-export interface TenantPollResult {
-  tenantId: string;
+export interface PollResult {
   webex?: {
     messages?: { fetched: number; ingested: number; updated: number };
     meetings?: MeetingSyncResult;
@@ -48,12 +47,27 @@ export interface TenantPollResult {
 
 export interface IngestionPollResult {
   polledAt: string;
-  tenants: TenantPollResult[];
+  result: PollResult;
   durationMs: number;
 }
 
 export function ingestionPollEnabled(): boolean {
   return process.env.ENABLE_INGESTION_POLL === "true";
+}
+
+async function resolvePollAppConfig() {
+  const userId = await getFirstUserId();
+  if (userId) {
+    return getAppConfig(userId);
+  }
+  return resolveAppConfig(null);
+}
+
+export async function shouldStartIngestionPoller(): Promise<boolean> {
+  if (ingestionPollEnabled()) return true;
+
+  const config = await resolvePollAppConfig();
+  return config.enableIngestionPoll;
 }
 
 export function ingestionPollIntervalMs(): number {
@@ -63,53 +77,50 @@ export function ingestionPollIntervalMs(): number {
     : 300_000;
 }
 
-async function tenantIdsWithActivePolicies(): Promise<string[]> {
-  const policies = await prisma.ingestionPolicy.findMany({
+async function resolveGlobalPollIntervalMs(): Promise<number> {
+  const config = await resolvePollAppConfig();
+  if (config.enableIngestionPoll) {
+    return Math.min(ingestionPollIntervalMs(), config.ingestionPollIntervalMs);
+  }
+  return ingestionPollIntervalMs();
+}
+
+async function hasActivePolicies(): Promise<boolean> {
+  const count = await prisma.ingestionPolicy.count({
     where: { status: "ACTIVE" },
-    select: { tenantId: true },
-    distinct: ["tenantId"],
   });
-  return policies.map((p) => p.tenantId);
+  return count > 0;
 }
 
-async function hasWebexConnection(tenantId: string): Promise<boolean> {
+async function hasWebexConnection(): Promise<boolean> {
   const token = await prisma.integrationToken.findUnique({
-    where: {
-      tenantId_provider: { tenantId, provider: "WEBEX" },
-    },
+    where: { provider: "WEBEX" },
     select: { id: true },
   });
   return !!token;
 }
 
-async function hasActiveEmailPolicy(tenantId: string): Promise<boolean> {
-  const policy = await prisma.ingestionPolicy.findFirst({
-    where: { tenantId, source: "EMAIL", status: "ACTIVE" },
-    select: { id: true },
+async function hasActiveEmailPolicy(): Promise<boolean> {
+  const policy = await prisma.ingestionPolicy.findUnique({
+    where: { source: "EMAIL" },
+    select: { status: true },
   });
-  return !!policy;
+  return policy?.status === "ACTIVE";
 }
 
-async function hasMicrosoft365Connection(tenantId: string): Promise<boolean> {
-  const token = await prisma.integrationToken.findUnique({
-    where: {
-      tenantId_provider: { tenantId, provider: "MICROSOFT365" },
-    },
-    select: { id: true },
-  });
-  return !!token;
-}
+export async function pollIngestion(): Promise<PollResult> {
+  const result: PollResult = {};
+  const appConfig = await resolvePollAppConfig();
 
-export async function pollTenantIngestion(
-  tenantId: string
-): Promise<TenantPollResult> {
-  const result: TenantPollResult = { tenantId };
+  if (!appConfig.enableIngestionPoll) {
+    return result;
+  }
 
-  if (await hasWebexConnection(tenantId)) {
+  if (await hasWebexConnection()) {
     try {
       result.webex = {
-        messages: await syncWebexMessages(tenantId),
-        meetings: await syncWebexMeetings(tenantId),
+        messages: await syncWebexMessages(),
+        meetings: await syncWebexMeetings(),
       };
     } catch (err) {
       result.webex = {
@@ -118,9 +129,9 @@ export async function pollTenantIngestion(
     }
   }
 
-  if (await hasActiveEmailPolicy(tenantId)) {
+  if (await hasActiveEmailPolicy()) {
     if (appleMailImportEnabled()) {
-      const mail = await importFromAppleMail(tenantId);
+      const mail = await importFromAppleMail();
       result.appleMail = {
         imported: mail.imported,
         skipped: mail.skipped,
@@ -131,7 +142,7 @@ export async function pollTenantIngestion(
     }
 
     if (appleCalendarImportEnabled()) {
-      const calendar = await importFromAppleCalendar(tenantId);
+      const calendar = await importFromAppleCalendar();
       result.appleCalendar = {
         imported: calendar.imported,
         skipped: calendar.skipped,
@@ -141,26 +152,18 @@ export async function pollTenantIngestion(
       };
     }
 
-    if (gongEmailCorrelationEnabled()) {
-      result.gong = await correlateGongEmailsForTenant(tenantId);
+    if (appConfig.enableGongEmailCorrelation) {
+      result.gong = await correlateGongEmails();
     }
 
     try {
-      if (await hasMicrosoft365Connection(tenantId)) {
-        const email = await syncEmailMessages(tenantId);
-        result.internalCalls = {
-          scanned: email.internalCallsBackfill?.scanned ?? 0,
-          ingested:
-            (email.internalCallsBackfill?.ingested ?? 0) +
-            (email.ingested ?? 0),
-          upgraded: email.internalCallsBackfill?.upgraded ?? 0,
-          skipped: email.internalCallsBackfill?.skipped ?? 0,
-          personalReplayCandidates: email.personalReplayCandidates,
-          error: email.error,
-        };
-      } else {
-        result.internalCalls = await backfillInternalCallReplays(tenantId);
-      }
+      const backfill = await runEmailBackfills();
+      result.internalCalls = {
+        scanned: backfill.internalCallsBackfill.scanned,
+        ingested: backfill.internalCallsBackfill.ingested,
+        upgraded: backfill.internalCallsBackfill.upgraded,
+        skipped: backfill.internalCallsBackfill.skipped,
+      };
     } catch (err) {
       result.internalCalls = {
         scanned: 0,
@@ -177,25 +180,29 @@ export async function pollTenantIngestion(
 
 export async function runIngestionPoll(): Promise<IngestionPollResult> {
   const started = Date.now();
-  const tenantIds = await tenantIdsWithActivePolicies();
-  const tenants: TenantPollResult[] = [];
 
-  for (const tenantId of tenantIds) {
-    try {
-      tenants.push(await pollTenantIngestion(tenantId));
-    } catch (err) {
-      tenants.push({
-        tenantId,
-        webex: {
-          error: err instanceof Error ? err.message : "Poll failed",
-        },
-      });
-    }
+  if (!(await hasActivePolicies())) {
+    return {
+      polledAt: new Date().toISOString(),
+      result: {},
+      durationMs: Date.now() - started,
+    };
+  }
+
+  let result: PollResult;
+  try {
+    result = await pollIngestion();
+  } catch (err) {
+    result = {
+      webex: {
+        error: err instanceof Error ? err.message : "Poll failed",
+      },
+    };
   }
 
   return {
     polledAt: new Date().toISOString(),
-    tenants,
+    result,
     durationMs: Date.now() - started,
   };
 }
@@ -204,46 +211,43 @@ let pollInFlight = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 function logPollSummary(result: IngestionPollResult): void {
-  for (const tenant of result.tenants) {
-    const parts: string[] = [];
-    const wx = tenant.webex;
-    if (wx?.messages) {
-      parts.push(
-        `webex messages +${wx.messages.ingested}/${wx.messages.fetched}`
-      );
-    }
-    if (wx?.meetings) {
-      parts.push(
-        `webex meetings +${wx.meetings.ingested}/${wx.meetings.fetched}`
-      );
-    }
-    if (tenant.appleMail) {
-      parts.push(
-        `mail +${tenant.appleMail.imported}/${tenant.appleMail.candidates}`
-      );
-    }
-    if (tenant.appleCalendar) {
-      parts.push(
-        `calendar +${tenant.appleCalendar.imported}/${tenant.appleCalendar.candidates}`
-      );
-    }
-    if (wx?.error) parts.push(`webex error: ${wx.error}`);
-    if (tenant.appleMail?.error) parts.push(`mail error: ${tenant.appleMail.error}`);
-    if (tenant.gong) {
-      parts.push(
-        `gong correlated ${tenant.gong.correlated}/${tenant.gong.scanned}`
-      );
-    }
-    if (tenant.appleCalendar?.error) {
-      parts.push(`calendar error: ${tenant.appleCalendar.error}`);
-    }
-    if (parts.length > 0) {
-      console.info(`[ingestion-poll] ${tenant.tenantId}: ${parts.join(" · ")}`);
-    }
+  const poll = result.result;
+  const parts: string[] = [];
+  const wx = poll.webex;
+  if (wx?.messages) {
+    parts.push(
+      `webex messages +${wx.messages.ingested}/${wx.messages.fetched}`
+    );
   }
-  console.info(
-    `[ingestion-poll] completed in ${result.durationMs}ms (${result.tenants.length} tenant(s))`
-  );
+  if (wx?.meetings) {
+    parts.push(
+      `webex meetings +${wx.meetings.ingested}/${wx.meetings.fetched}`
+    );
+  }
+  if (poll.appleMail) {
+    parts.push(
+      `mail +${poll.appleMail.imported}/${poll.appleMail.candidates}`
+    );
+  }
+  if (poll.appleCalendar) {
+    parts.push(
+      `calendar +${poll.appleCalendar.imported}/${poll.appleCalendar.candidates}`
+    );
+  }
+  if (wx?.error) parts.push(`webex error: ${wx.error}`);
+  if (poll.appleMail?.error) parts.push(`mail error: ${poll.appleMail.error}`);
+  if (poll.gong) {
+    parts.push(
+      `gong correlated ${poll.gong.correlated}/${poll.gong.scanned}`
+    );
+  }
+  if (poll.appleCalendar?.error) {
+    parts.push(`calendar error: ${poll.appleCalendar.error}`);
+  }
+  if (parts.length > 0) {
+    console.info(`[ingestion-poll] ${parts.join(" · ")}`);
+  }
+  console.info(`[ingestion-poll] completed in ${result.durationMs}ms`);
 }
 
 async function runPollTick(): Promise<void> {
@@ -266,12 +270,12 @@ async function runPollTick(): Promise<void> {
   }
 }
 
-/** Start background polling when ENABLE_INGESTION_POLL=true. */
-export function startIngestionPoller(): void {
-  if (!ingestionPollEnabled()) return;
+/** Start background polling when enabled via env or user app config. */
+export async function startIngestionPoller(): Promise<void> {
+  if (!(await shouldStartIngestionPoller())) return;
   if (pollTimer) return;
 
-  const intervalMs = ingestionPollIntervalMs();
+  const intervalMs = await resolveGlobalPollIntervalMs();
   console.info(
     `[ingestion-poll] enabled — every ${Math.round(intervalMs / 1000)}s`
   );
@@ -280,6 +284,11 @@ export function startIngestionPoller(): void {
   pollTimer = setInterval(() => {
     void runPollTick();
   }, intervalMs);
+}
+
+export async function restartIngestionPoller(): Promise<void> {
+  stopIngestionPoller();
+  await startIngestionPoller();
 }
 
 export function stopIngestionPoller(): void {

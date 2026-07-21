@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { requireAdmin } from "@/lib/tenant";
-
 export async function POST() {
   const session = await getAuthSession();
   if (!session) {
@@ -10,19 +8,13 @@ export async function POST() {
   }
 
   try {
-    requireAdmin({
-      tenantId: session.tenantId,
-      userId: session.userId,
-      role: session.role,
-    });
-  } catch {
+      } catch {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const policy = await prisma.ingestionPolicy.findFirst({
     where: {
-      tenantId: session.tenantId,
-      source: "EMAIL",
+            source: "EMAIL",
     },
   });
 

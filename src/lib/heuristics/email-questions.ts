@@ -2,6 +2,10 @@ import type { Priority } from "@prisma/client";
 import { scoreToPriority } from "./index";
 import type { MentionUser } from "./mentions";
 import { viewerInRecipients as recipientMatch } from "../integrations/email/recipients";
+import {
+  filterSubstantiveQuestions,
+  isBoilerplateQuestion,
+} from "./boilerplate-questions";
 
 export { viewerInRecipients } from "../integrations/email/recipients";
 
@@ -37,6 +41,14 @@ const IMPLICIT_QUESTION_PATTERNS = [
   /\b(?:can|could|would|do|does)\s+(?:we|anyone|someone|anybody)\b[^.!?\n]{3,140}\?/i,
 ];
 
+/** Soft requests without a question mark — common in partner follow-ups. */
+const SOFT_REQUEST_PATTERNS = [
+  /\b(?:wondering|curious) if you\b[^.!?\n]{0,160}/i,
+  /\bif you (?:have|had) anything\b[^.!?\n]{0,160}/i,
+  /\banything you could share\b/i,
+  /\b(?:could|would) you share\b/i,
+];
+
 const MAILER_FROM_PATTERNS = [
   /(?:^|[^a-z0-9])no[-_.]?reply@/i,
   /donotreply@/i,
@@ -65,10 +77,7 @@ export function detectQuestions(text: string): {
   const snippets: string[] = [];
   const seen = new Set<string>();
 
-  const candidates = [
-    ...cleaned.split(/(?<=[.!?])\s+/),
-    ...cleaned.split(/\n+/),
-  ];
+  const candidates = cleaned.split(/(?<=[.!?])\s+/);
 
   for (const raw of candidates) {
     const sentence = raw.trim();
@@ -78,7 +87,11 @@ export function detectQuestions(text: string): {
     const implicit = IMPLICIT_QUESTION_PATTERNS.some((pattern) =>
       pattern.test(sentence)
     );
-    if (!hasMark && !implicit) continue;
+    const softRequest = SOFT_REQUEST_PATTERNS.some((pattern) =>
+      pattern.test(sentence)
+    );
+    if (!hasMark && !implicit && !softRequest) continue;
+    if (isBoilerplateQuestion(sentence)) continue;
 
     const key = sentence.toLowerCase();
     if (seen.has(key)) continue;
@@ -88,6 +101,8 @@ export function detectQuestions(text: string): {
 
   return { hasQuestion: snippets.length > 0, snippets: snippets.slice(0, 4) };
 }
+
+export { isBoilerplateQuestion, filterSubstantiveQuestions };
 
 export function isMailerEmail(input: {
   fromAddress?: string;

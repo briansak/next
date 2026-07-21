@@ -33,13 +33,7 @@ async function probe(label: string, url: string, token: string) {
 }
 
 async function main() {
-  const tenant = await prisma.tenant.findFirst();
-  if (!tenant) {
-    console.log("No tenant");
-    return;
-  }
-
-  const token = await getWebexAccessToken(tenant.id);
+  const token = await getWebexAccessToken();
   if (!token) {
     console.log("No Webex token");
     return;
@@ -73,11 +67,10 @@ async function main() {
     token
   );
 
-  const members = await prisma.user.findMany({
-    where: { memberships: { some: { tenantId: tenant.id } } },
+  const users = await prisma.user.findMany({
     select: { email: true },
   });
-  console.log("\nTenant member emails:", members.map((m) => m.email));
+  console.log("\nUser emails:", users.map((m) => m.email));
 
   await prisma.$disconnect();
 }

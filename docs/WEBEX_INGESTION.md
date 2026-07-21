@@ -50,7 +50,7 @@ Under the hood, these tools call `webexapis.com` REST endpoints — same as our 
 
 - Deterministic background sync jobs
 - Webhook HMAC verification
-- Multi-tenant token storage and allowlist enforcement
+- Per-install OAuth token storage and allowlist enforcement
 - No dependency on MCP client runtime or Control Hub MCP enablement for basic operation
 
 Webex's own guidance: use **APIs for production apps**, **MCP for AI agent integration**.
@@ -80,7 +80,7 @@ Allowlisted Webex Spaces
                                        ▼
                               Heuristics engine
                                        ▼
-                              Communication (tenant-scoped)
+                              Communication (local DB)
 ```
 
 ### Privacy guardrails (unchanged)
@@ -165,4 +165,23 @@ Public Vidcast MCP (Control Hub must enable Vidcast MCP for your org):
 npx tsx scripts/probe-vidcast-mcp.ts
 ```
 
-**Until public Vidcast MCP is enabled**, Internal Calls still work via replay notification emails: summary from the email body + **Watch on Vidcast** button from the share link. No highlight reel ingestion until `mcp.webexapis.com/mcp/vidcast` grants access.
+**Until public Vidcast MCP is enabled**, Meeting Summaries still work via replay notification emails. For **Vidcast** replay links (`app.vidcast.io/share/...`), the app can also pull AI chapters and highlights directly from `https://api.vidcast.io` using your existing Webex OAuth token — no MCP required.
+
+Direct API (used by replay enrichment):
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /v1/share/{shareId}/chapters` | AI chapter summary (timestamped outline) |
+| `GET /v1/share/{shareId}/highlights` | AI highlight reel items (timestamps + labels) |
+| `GET /v3/transcripts/{shareId}` | Full transcript (summarized locally via Ollama when `OLLAMA_BASE_URL` is set) |
+| `POST /v1/access/shared/{shareId}` | Resolves internal `videoId` |
+
+Replay emails often mask Vidcast behind `app.campaignmgr.cisco.com` / Eloqua bridge links. During enrichment the app follows those redirects (typically 2 hops) to resolve the real `app.vidcast.io/share/{uuid}` before calling the API above.
+
+Probe a share link:
+
+```bash
+npx tsx scripts/probe-vidcast-api.ts "https://app.vidcast.io/share/<share-id>"
+```
+
+**Until public Vidcast MCP is enabled**, highlight reel ingestion via MCP still requires `mcp.webexapis.com/mcp/vidcast` Control Hub access.

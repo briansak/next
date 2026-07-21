@@ -1,4 +1,15 @@
+import type { CallHighlight } from "@/lib/heuristics/ollama-vision";
 import { summarizeMeetingTranscript } from "@/lib/heuristics/ollama";
+import {
+  buildMeetingHighlights,
+  estimateDurationFromSummaryInput,
+} from "@/lib/heuristics/meeting-highlights";
+import { getAppConfig } from "@/lib/config/app-config-store";
+import { ollamaRuntimeFromConfig } from "@/lib/config/app-config";
+import {
+  buildHeuristicTranscriptSummary,
+  meetingOllamaSummaryEnabledFromConfig,
+} from "@/lib/heuristics/transcript-summary";
 import {
   downloadRecordingAudio,
   recordingTranscriptionEnabled,
@@ -6,17 +17,21 @@ import {
 } from "./recording-transcribe";
 import {
   getMeetingSummaries,
+  getRecordingDetails,
   listMeetingRecordings,
   listMeetingTranscripts,
   recordingDownloadUrl,
+  recordingMatchesMeeting,
+  recordingPlaybackUrl,
+  recordingTranscriptDownloadUrl,
   transcriptDownloadUrl,
   type MeetingEnrichment,
   type WebexMeeting,
   type WebexRecording,
 } from "./meetings";
-import { parseTranscriptContent, truncateForSummary } from "./transcript-text";
+import { parseTranscriptParts, truncateForSummary } from "./transcript-text";
 
-export type SummarySource = "webex-ai" | "ollama" | "none";
+export type SummarySource = "webex-ai" | "ollama" | "heuristic" | "none";
 export type TranscriptSource = "webex" | "whisper" | "none";
 
 export interface MeetingIntelligence {
@@ -27,28 +42,36 @@ export interface MeetingIntelligence {
   transcriptSource: TranscriptSource;
   transcriptDownloadUrl?: string;
   recordingDownloadUrl?: string;
+  recordingPlaybackUrl?: string;
+  recordingId?: string;
+  callHighlights?: CallHighlight[];
 }
 
-function recordingMatchesMeeting(
-  recording: WebexRecording,
-  meeting: WebexMeeting
-): boolean {
-  if (recording.meetingId === meeting.id) return true;
+async function resolveRecordingUrls(
+  accessToken: string,
+  recording: WebexRecording
+): Promise<{ downloadUrl?: string; playbackUrl?: string; detail?: WebexRecording }> {
+  let downloadUrl = recordingDownloadUrl(recording);
+  let playbackUrl = recordingPlaybackUrl(recording);
+  let detail: WebexRecording | null = recording;
 
-  const meetingSeriesId =
-    meeting.meetingSeriesId ?? meeting.id.split("_I_")[0];
-  if (recording.meetingSeriesId && recording.meetingSeriesId === meetingSeriesId) {
-    return true;
+  if (!downloadUrl || !recordingTranscriptDownloadUrl(recording)) {
+    detail = await getRecordingDetails(accessToken, recording.id).catch(
+      () => recording
+    );
+    if (detail) {
+      downloadUrl = downloadUrl ?? recordingDownloadUrl(detail);
+      playbackUrl = playbackUrl ?? recordingPlaybackUrl(detail);
+    }
   }
 
-  const prefix = meeting.id.split("_I_")[0];
-  return Boolean(recording.meetingId?.startsWith(prefix));
+  return { downloadUrl, playbackUrl, detail: detail ?? recording };
 }
 
 async function downloadTranscriptFromUrl(
   url: string,
   accessToken: string
-): Promise<string | null> {
+): Promise<{ text: string; summaryInput: string } | null> {
   try {
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -57,9 +80,9 @@ async function downloadTranscriptFromUrl(
     if (!response.ok) {
       const fallback = await fetch(url, { redirect: "follow" });
       if (!fallback.ok) return null;
-      return parseTranscriptContent(await fallback.text());
+      return parseTranscriptParts(await fallback.text());
     }
-    return parseTranscriptContent(await response.text());
+    return parseTranscriptParts(await response.text());
   } catch {
     return null;
   }
@@ -69,8 +92,14 @@ async function resolveTranscriptText(
   accessToken: string,
   meeting: WebexMeeting,
   enrichment: MeetingEnrichment,
-  matchedRecording?: WebexRecording
-): Promise<{ text?: string; source: TranscriptSource; downloadUrl?: string }> {
+  matchedRecording?: WebexRecording,
+  recordingDetail?: WebexRecording
+): Promise<{
+  text?: string;
+  summaryInput?: string;
+  source: TranscriptSource;
+  downloadUrl?: string;
+}> {
   const meetingIds = new Set<string>([meeting.id]);
   if (matchedRecording?.meetingId) meetingIds.add(matchedRecording.meetingId);
 
@@ -83,22 +112,45 @@ async function resolveTranscriptText(
     for (const transcript of transcripts) {
       const url = transcriptDownloadUrl(transcript);
       if (!url) continue;
-      const text = await downloadTranscriptFromUrl(url, accessToken);
-      if (text) {
-        return { text, source: "webex", downloadUrl: url };
+      const parsed = await downloadTranscriptFromUrl(url, accessToken);
+      if (parsed?.text) {
+        return {
+          text: parsed.text,
+          summaryInput: parsed.summaryInput,
+          source: "webex",
+          downloadUrl: url,
+        };
       }
     }
   }
 
+  const recordingTranscriptUrl = recordingDetail
+    ? recordingTranscriptDownloadUrl(recordingDetail)
+    : undefined;
+  if (recordingTranscriptUrl) {
+    const parsed = await downloadTranscriptFromUrl(
+      recordingTranscriptUrl,
+      accessToken
+    );
+    if (parsed?.text) {
+      return {
+        text: parsed.text,
+        summaryInput: parsed.summaryInput,
+        source: "webex",
+        downloadUrl: recordingTranscriptUrl,
+      };
+    }
+  }
+
   if (matchedRecording && recordingTranscriptionEnabled()) {
-    const audioUrl = recordingDownloadUrl(matchedRecording);
+    const audioUrl = recordingDownloadUrl(recordingDetail ?? matchedRecording);
     if (audioUrl) {
       const audio = await downloadRecordingAudio(audioUrl);
       if (audio) {
         const ext = audioUrl.includes(".m4a") ? "m4a" : "mp4";
         const text = await transcribeWithWhisperCli(audio, ext);
         if (text) {
-          return { text, source: "whisper" };
+          return { text, summaryInput: text, source: "whisper" };
         }
       }
     }
@@ -107,17 +159,67 @@ async function resolveTranscriptText(
   return { source: "none" };
 }
 
+async function summarizeFromTranscript(
+  meetingTitle: string,
+  transcript: string,
+  summaryInput?: string,
+      userId?: string
+): Promise<{ text: string; source: SummarySource; actionItems: string[] }> {
+  const truncated = truncateForSummary(summaryInput?.trim() || transcript);
+  const appConfig = userId ? await getAppConfig(userId) : null;
+  const ollamaRuntime = appConfig ? ollamaRuntimeFromConfig(appConfig) : null;
+  const meetingOllamaEnabled = appConfig
+    ? meetingOllamaSummaryEnabledFromConfig(appConfig)
+    : false;
+
+  if (meetingOllamaEnabled) {
+    const ollama = await summarizeMeetingTranscript(
+      truncated,
+      meetingTitle,
+      ollamaRuntime
+    );
+    if (ollama?.summary?.trim()) {
+      return {
+        text: ollama.summary.trim(),
+        source: "ollama",
+        actionItems: (ollama.actionItems ?? [])
+          .filter(Boolean)
+          .slice(0, 8),
+      };
+    }
+  }
+
+  const heuristic = buildHeuristicTranscriptSummary(meetingTitle, truncated);
+  return {
+    text: heuristic.text,
+    source: "heuristic",
+    actionItems: heuristic.actionItems,
+  };
+}
+
 export async function resolveMeetingIntelligence(
   accessToken: string,
   meeting: WebexMeeting,
-  enrichment: MeetingEnrichment
+  enrichment: MeetingEnrichment,
+      userId?: string
 ): Promise<MeetingIntelligence> {
-  const allRecordings = await listMeetingRecordings(accessToken, meeting.id).catch(
+  const allRecordings = await listMeetingRecordings(accessToken, meeting).catch(
     () => enrichment.recordings
   );
+  const mergedRecordings = [...allRecordings];
+  for (const recording of enrichment.recordings) {
+    if (!mergedRecordings.some((item) => item.id === recording.id)) {
+      mergedRecordings.push(recording);
+    }
+  }
+
   const matchedRecording =
-    allRecordings.find((r) => recordingMatchesMeeting(r, meeting)) ??
-    enrichment.recordings.find((r) => recordingMatchesMeeting(r, meeting));
+    mergedRecordings.find((r) => recordingMatchesMeeting(r, meeting)) ??
+    mergedRecordings[0];
+
+  const recordingUrls = matchedRecording
+    ? await resolveRecordingUrls(accessToken, matchedRecording)
+    : { downloadUrl: undefined, playbackUrl: undefined, detail: undefined };
 
   let summaryText = enrichment.summary?.note;
   let summaryActionItems = (enrichment.summary?.actionItems ?? []).map((item) =>
@@ -126,7 +228,9 @@ export async function resolveMeetingIntelligence(
   let summarySource: SummarySource = summaryText ? "webex-ai" : "none";
 
   if (!summaryText) {
-    const meetingIds = new Set([meeting.id, matchedRecording?.meetingId].filter(Boolean) as string[]);
+    const meetingIds = new Set(
+      [meeting.id, matchedRecording?.meetingId].filter(Boolean) as string[]
+    );
     for (const id of meetingIds) {
       const summaries = await getMeetingSummaries(accessToken, id).catch(() => []);
       if (summaries[0]?.note) {
@@ -144,23 +248,35 @@ export async function resolveMeetingIntelligence(
     accessToken,
     meeting,
     enrichment,
-    matchedRecording
+    matchedRecording,
+    recordingUrls.detail
   );
 
   if (!summaryText && transcriptResult.text) {
-    const ollama = await summarizeMeetingTranscript(
-      truncateForSummary(transcriptResult.text),
-      meeting.title
+    const derived = await summarizeFromTranscript(
+      meeting.title,
+      transcriptResult.text,
+      transcriptResult.summaryInput,
+      userId
     );
-    if (ollama?.summary) {
-      summaryText = ollama.summary;
-      summarySource = "ollama";
-      if (ollama.actionItems?.length) {
-        summaryActionItems = ollama.actionItems.filter(Boolean);
-      } else if (ollama.suggestedAction) {
-        summaryActionItems = [ollama.suggestedAction];
-      }
+    summaryText = derived.text;
+    summarySource = derived.source;
+    if (derived.actionItems.length > 0) {
+      summaryActionItems = derived.actionItems;
     }
+  }
+
+  let callHighlights: CallHighlight[] | undefined;
+  if (transcriptResult.summaryInput?.trim()) {
+    const durationSeconds = estimateDurationFromSummaryInput(
+      transcriptResult.summaryInput
+    );
+    callHighlights = await buildMeetingHighlights({
+      meetingTitle: meeting.title,
+      summaryInput: transcriptResult.summaryInput,
+      durationSeconds: Math.max(durationSeconds, 60),
+      userId,
+    });
   }
 
   return {
@@ -170,8 +286,9 @@ export async function resolveMeetingIntelligence(
     transcriptText: transcriptResult.text,
     transcriptSource: transcriptResult.source,
     transcriptDownloadUrl: transcriptResult.downloadUrl,
-    recordingDownloadUrl: matchedRecording
-      ? recordingDownloadUrl(matchedRecording)
-      : undefined,
+    recordingDownloadUrl: recordingUrls.downloadUrl,
+    recordingPlaybackUrl: recordingUrls.playbackUrl,
+    recordingId: matchedRecording?.id,
+    callHighlights,
   };
 }

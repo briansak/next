@@ -3,7 +3,6 @@ import { resolve } from "path";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "../src/lib/auth/password";
 
-// tsx does not auto-load .env — load it before Prisma connects
 try {
   const envPath = resolve(__dirname, "../.env");
   for (const line of readFileSync(envPath, "utf8").split("\n")) {
@@ -21,86 +20,66 @@ try {
 const prisma = new PrismaClient();
 
 async function main() {
-  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? "admin@example.com";
+  const partnerName = process.env.SEED_PARTNER_NAME?.trim() || "Acme Corp";
+  const adminEmail = process.env.SEED_ADMIN_EMAIL?.trim();
   const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "changeme123";
-  const adminName = process.env.SEED_ADMIN_NAME ?? "WWT Admin";
+  const adminName = process.env.SEED_ADMIN_NAME ?? "Admin";
 
-  console.log("Seeding WWT tenant…");
+  console.log("Seeding local single-user app…");
 
-  const tenant = await prisma.tenant.upsert({
-    where: { slug: "wwt" },
-    update: {},
-    create: {
-      name: "WWT Coverage Team",
-      slug: "wwt",
-      partner: {
-        create: { name: "World Wide Technology" },
+  let adminSummary: string | null = null;
+
+  if (adminEmail) {
+    const passwordHash = await hashPassword(adminPassword);
+    const admin = await prisma.user.upsert({
+      where: { email: adminEmail },
+      update: {
+        passwordHash,
+        name: adminName,
+        partnerName,
       },
-    },
-    include: { partner: true },
-  });
-
-  const passwordHash = await hashPassword(adminPassword);
-
-  const admin = await prisma.user.upsert({
-    where: { email: adminEmail },
-    update: { passwordHash, name: adminName },
-    create: {
-      email: adminEmail,
-      name: adminName,
-      passwordHash,
-      memberships: {
-        create: {
-          tenantId: tenant.id,
-          role: "ADMIN",
-        },
+      create: {
+        email: adminEmail,
+        name: adminName,
+        passwordHash,
+        partnerName,
       },
-    },
-  });
+    });
+    adminSummary = `${admin.email} / ${adminPassword}`;
+  }
 
   const emailPolicy = await prisma.ingestionPolicy.upsert({
-    where: { id: "seed-wwt-email-policy" },
+    where: { source: "EMAIL" },
     update: {},
     create: {
-      id: "seed-wwt-email-policy",
-      tenantId: tenant.id,
       source: "EMAIL",
-      name: "WWT partner email",
+      name: "Partner email",
       status: "DRAFT",
       description:
-        "Ingest correspondence from connected mailboxes. Partner rules below boost priority for coverage-related messages.",
-      emailAllowlists: {
-        create: [
-          { fromDomain: "wwt.com" },
-          { subjectPrefix: "[WWT]" },
-        ],
-      },
+        "Configure partner domains and subject prefixes to boost priority on My Priorities.",
     },
   });
 
   const webexPolicy = await prisma.ingestionPolicy.upsert({
-    where: { id: "seed-wwt-webex-policy" },
+    where: { source: "WEBEX" },
     update: {},
     create: {
-      id: "seed-wwt-webex-policy",
-      tenantId: tenant.id,
       source: "WEBEX",
-      name: "WWT Webex spaces",
+      name: "Webex spaces",
       status: "DRAFT",
       description:
-        "Add specific Webex space IDs for WWT partner conversations. No spaces are synced until added.",
+        "Add specific Webex space IDs for partner conversations. No spaces are synced until added.",
     },
   });
 
   console.log("Seed complete:");
-  console.log(`  Tenant:  ${tenant.name} (${tenant.slug})`);
-  console.log(`  Partner: ${tenant.partner?.name}`);
-  console.log(`  Admin:   ${admin.email}`);
+  console.log(`  Partner: ${partnerName}`);
+  if (adminSummary) {
+    console.log(`  User:    ${adminSummary}`);
+  } else {
+    console.log("  User:    (none — register at /register to create your account)");
+  }
   console.log(`  Policies: ${emailPolicy.name}, ${webexPolicy.name} (both DRAFT)`);
-  console.log("");
-  console.log("Sign in with:");
-  console.log(`  Email:    ${adminEmail}`);
-  console.log(`  Password: ${adminPassword}`);
 }
 
 main()

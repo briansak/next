@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@prisma/client";
+import { mergeCommunicationMetadata } from "@/lib/communications/viewer-override";
 import { analyzeCommunication, scoreToPriority } from "@/lib/heuristics";
 import { analyzeCalendarEvent } from "@/lib/heuristics/calendar-planning";
 import { tryCorrelateGongEmail } from "@/lib/integrations/gong/correlate";
@@ -37,14 +39,7 @@ import {
   calendarEventId,
   type CalendarEvent,
 } from "@/lib/integrations/email/ics";
-import {
-  fetchMailboxEmails,
-  fetchPersonalMailboxReplayEmails,
-  getMicrosoft365Config,
-  probeMicrosoft365Mailbox,
-  refreshMicrosoft365Token,
-} from "@/lib/integrations/microsoft365";
-import { getTenantMembers } from "@/lib/tenant/members";
+import { getAppUserForMentions } from "@/lib/user/profile";
 import { normalizeEmailBodyText } from "@/lib/integrations/email/body-text";
 import {
   calendarEventKindFromInput,
@@ -55,54 +50,39 @@ import {
 
 export const EMAIL_LOOKBACK_DAYS = 14;
 
-export async function getMicrosoft365AccessToken(
-  tenantId: string
-): Promise<string | null> {
-  const config = getMicrosoft365Config();
-  if (!config) return null;
+export interface EmailBackfillResult {
+  internalCallsBackfill: BackfillInternalCallsResult;
+  productAnnouncementsBackfill: BackfillProductAnnouncementsResult;
+}
 
-  const token = await prisma.integrationToken.findUnique({
+export async function runEmailBackfills(): Promise<EmailBackfillResult> {
+  const internalCallsBackfill = await backfillInternalCallReplays();
+  const productAnnouncementsBackfill = await backfillProductAnnouncements();
+  return { internalCallsBackfill, productAnnouncementsBackfill };
+}
+
+export async function getEmailAllowlistRules(
+  ): Promise<EmailAllowlistRule[]> {
+  const policy = await prisma.ingestionPolicy.findFirst({
     where: {
-      tenantId_provider: { tenantId, provider: "MICROSOFT365" },
+      source: "EMAIL",
     },
+    include: { emailAllowlists: true },
   });
 
-  if (!token) return null;
+  if (!policy) return [];
 
-  if (token.expiresAt && token.expiresAt > new Date()) {
-    return token.accessToken;
-  }
-
-  if (!token.refreshToken) {
-    return token.accessToken;
-  }
-
-  try {
-    const refreshed = await refreshMicrosoft365Token(config, token.refreshToken);
-    const expiresAt = new Date(Date.now() + refreshed.expiresIn * 1000);
-
-    await prisma.integrationToken.update({
-      where: { id: token.id },
-      data: {
-        accessToken: refreshed.accessToken,
-        refreshToken: refreshed.refreshToken,
-        expiresAt,
-      },
-    });
-
-    return refreshed.accessToken;
-  } catch (err) {
-    console.error("Microsoft 365 token refresh failed:", err);
-    return null;
-  }
+  return policy.emailAllowlists.map((rule) => ({
+    fromAddress: rule.fromAddress,
+    fromDomain: rule.fromDomain,
+    subjectPrefix: rule.subjectPrefix,
+  }));
 }
 
 export async function getActiveEmailAllowlist(
-  tenantId: string
-): Promise<EmailAllowlistRule[]> {
+  ): Promise<EmailAllowlistRule[]> {
   const policy = await prisma.ingestionPolicy.findFirst({
     where: {
-      tenantId,
       source: "EMAIL",
       status: "ACTIVE",
     },
@@ -118,10 +98,9 @@ export async function getActiveEmailAllowlist(
   }));
 }
 
-export async function isEmailIngestionActive(tenantId: string): Promise<boolean> {
+export async function isEmailIngestionActive(): Promise<boolean> {
   const policy = await prisma.ingestionPolicy.findFirst({
     where: {
-      tenantId,
       source: "EMAIL",
       status: "ACTIVE",
     },
@@ -135,12 +114,11 @@ function plainBody(message: EmailMessage): string {
 }
 
 export async function ingestEmailMessage(
-  tenantId: string,
-  message: EmailMessage,
+    message: EmailMessage,
   allowlistRef?: string,
-  options?: { importSource?: "graph" | "eml" | "apple-mail" }
+  options?: { importSource?: "eml" | "apple-mail" | "import" }
 ): Promise<{ created: boolean; id: string; gong?: boolean }> {
-  const gongResult = await tryCorrelateGongEmail(tenantId, {
+  const gongResult = await tryCorrelateGongEmail( {
     messageId: message.messageId,
     subject: message.subject,
     body: message.body,
@@ -159,7 +137,7 @@ export async function ingestEmailMessage(
     };
   }
 
-  const replayResult = await tryIngestReplayEmail(tenantId, {
+  const replayResult = await tryIngestReplayEmail( {
     messageId: message.messageId,
     subject: message.subject,
     body: message.body,
@@ -177,7 +155,7 @@ export async function ingestEmailMessage(
     };
   }
 
-  const announcementResult = await tryIngestProductAnnouncementEmail(tenantId, {
+  const announcementResult = await tryIngestProductAnnouncementEmail( {
     messageId: message.messageId,
     subject: message.subject,
     body: message.body,
@@ -196,8 +174,8 @@ export async function ingestEmailMessage(
   }
 
   const body = plainBody(message);
-  const teamMembers = await getTenantMembers(tenantId);
-  const partnerAllowlistRules = await getActiveEmailAllowlist(tenantId);
+  const teamMembers = await getAppUserForMentions();
+  const partnerAllowlistRules = await getActiveEmailAllowlist();
 
   const analysis = analyzeCommunication({
     body,
@@ -217,9 +195,7 @@ export async function ingestEmailMessage(
 
   const existing = await prisma.communication.findUnique({
     where: {
-      tenantId_source_externalId: {
-        tenantId,
-        source: "EMAIL",
+      source_externalId: { source: "EMAIL",
         externalId: message.messageId,
       },
     },
@@ -243,7 +219,7 @@ export async function ingestEmailMessage(
       ...(options?.importSource === "apple-mail" ? ["apple-mail-import"] : []),
     ],
     allowlistRef,
-    metadata: {
+    metadata: mergeCommunicationMetadata(existing?.metadata, {
       threadId: message.threadId,
       fromAddress: message.fromAddress,
       mentionedUserIds: analysis.mentionedUserIds,
@@ -253,8 +229,8 @@ export async function ingestEmailMessage(
       hasQuestion: analysis.hasQuestion,
       isMailer: analysis.isMailer,
       questionSnippets: analysis.questionSnippets,
-      importSource: options?.importSource ?? "graph",
-    },
+      importSource: options?.importSource ?? "import",
+    }) as Prisma.InputJsonValue,
   };
 
   if (existing) {
@@ -267,7 +243,6 @@ export async function ingestEmailMessage(
 
   const communication = await prisma.communication.create({
     data: {
-      tenantId,
       source: "EMAIL",
       externalId: message.messageId,
       threadId: message.threadId,
@@ -285,7 +260,6 @@ export async function ingestEmailMessage(
       for (const userId of mentionedAssignees) {
         await prisma.nextStep.create({
           data: {
-            tenantId,
             communicationId: communication.id,
             title: "Respond — you were @mentioned",
             priority: analysis.priority,
@@ -300,7 +274,6 @@ export async function ingestEmailMessage(
       for (const userId of directedAssignees) {
         await prisma.nextStep.create({
           data: {
-            tenantId,
             communicationId: communication.id,
             title: "Answer the question in this email",
             priority: analysis.priority,
@@ -314,7 +287,6 @@ export async function ingestEmailMessage(
     if (mentionedAssignees.length === 0 && directedAssignees.length === 0) {
       await prisma.nextStep.create({
         data: {
-          tenantId,
           communicationId: communication.id,
           title: analysis.suggestedAction,
           priority: analysis.priority,
@@ -325,198 +297,6 @@ export async function ingestEmailMessage(
   }
 
   return { created: true, id: communication.id };
-}
-
-export interface EmailSyncResult {
-  fetched: number;
-  ingested: number;
-  skipped: number;
-  mailbox?: string;
-  connectedAs?: string;
-  error?: string;
-  personalReplayCandidates?: number;
-  internalCallsBackfill?: {
-    scanned: number;
-    ingested: number;
-    upgraded: number;
-    skipped: number;
-  };
-  productAnnouncementsBackfill?: {
-    scanned: number;
-    upgraded: number;
-    created: number;
-  };
-}
-
-export async function syncEmailMessages(
-  tenantId: string
-): Promise<EmailSyncResult> {
-  const sharedMailbox = process.env.MICROSOFT_SHARED_MAILBOX?.trim();
-  if (!sharedMailbox) {
-    return {
-      fetched: 0,
-      ingested: 0,
-      skipped: 0,
-      error: "MICROSOFT_SHARED_MAILBOX is not configured in .env",
-    };
-  }
-
-  const accessToken = await getMicrosoft365AccessToken(tenantId);
-  if (!accessToken) {
-    return {
-      fetched: 0,
-      ingested: 0,
-      skipped: 0,
-      error:
-        "Microsoft 365 is not connected or the refresh token expired. Reconnect on ingestion settings (you may need to complete Duo again).",
-    };
-  }
-
-  const tokenRecord = await prisma.integrationToken.findUnique({
-    where: {
-      tenantId_provider: { tenantId, provider: "MICROSOFT365" },
-    },
-  });
-  const connectedAs =
-    (tokenRecord?.metadata as { connectedAs?: string } | null)?.connectedAs;
-
-  if (!(await isEmailIngestionActive(tenantId))) {
-    return {
-      fetched: 0,
-      ingested: 0,
-      skipped: 0,
-      mailbox: sharedMailbox,
-      connectedAs,
-      error:
-        "Email ingestion policy is not active. Activate the email policy after connecting.",
-    };
-  }
-
-  const since = new Date();
-  since.setDate(since.getDate() - EMAIL_LOOKBACK_DAYS);
-
-  const internalSince = new Date();
-  internalSince.setDate(internalSince.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
-
-  let messages: EmailMessage[];
-  let personalReplayMessages: EmailMessage[] = [];
-  try {
-    messages = await fetchMailboxEmails(accessToken, sharedMailbox, since);
-    personalReplayMessages = await fetchPersonalMailboxReplayEmails(
-      accessToken,
-      internalSince
-    );
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Graph API failed";
-    return {
-      fetched: 0,
-      ingested: 0,
-      skipped: 0,
-      mailbox: sharedMailbox,
-      connectedAs,
-      error: message,
-    };
-  }
-
-  const policy = await prisma.ingestionPolicy.findFirst({
-    where: { tenantId, source: "EMAIL", status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  let ingested = 0;
-  let skipped = 0;
-
-  const seenIds = new Set<string>();
-  const allMessages = [...messages, ...personalReplayMessages].filter((message) => {
-    if (seenIds.has(message.messageId)) return false;
-    seenIds.add(message.messageId);
-    return true;
-  });
-
-  for (const message of allMessages) {
-    try {
-      const result = await ingestEmailMessage(
-        tenantId,
-        message,
-        policy?.id
-      );
-      if (result.created) ingested++;
-      else skipped++;
-    } catch (err) {
-      console.error(`Failed to ingest email ${message.messageId}:`, err);
-      skipped++;
-    }
-  }
-
-  const backfill = await backfillInternalCallReplays(tenantId);
-  const productAnnouncementsBackfill = await backfillProductAnnouncements(tenantId);
-
-  return {
-    fetched: allMessages.length,
-    ingested,
-    skipped,
-    mailbox: sharedMailbox,
-    connectedAs,
-    personalReplayCandidates: personalReplayMessages.length,
-    internalCallsBackfill: backfill,
-    productAnnouncementsBackfill,
-  };
-}
-
-export async function testMicrosoft365Connection(
-  tenantId: string
-): Promise<{
-  ok: boolean;
-  mailbox: string;
-  connectedAs?: string;
-  sampleCount?: number;
-  error?: string;
-  hint?: string;
-}> {
-  const sharedMailbox = process.env.MICROSOFT_SHARED_MAILBOX?.trim();
-  if (!sharedMailbox) {
-    return {
-      ok: false,
-      mailbox: "(not configured)",
-      error: "MICROSOFT_SHARED_MAILBOX is not set",
-    };
-  }
-
-  const accessToken = await getMicrosoft365AccessToken(tenantId);
-  if (!accessToken) {
-    return {
-      ok: false,
-      mailbox: sharedMailbox,
-      error: "Not connected or token refresh failed",
-      hint: "Reconnect Microsoft 365 and complete Duo when prompted.",
-    };
-  }
-
-  const tokenRecord = await prisma.integrationToken.findUnique({
-    where: {
-      tenantId_provider: { tenantId, provider: "MICROSOFT365" },
-    },
-  });
-  const connectedAs =
-    (tokenRecord?.metadata as { connectedAs?: string } | null)?.connectedAs;
-
-  const probe = await probeMicrosoft365Mailbox(accessToken, sharedMailbox);
-  if (!probe.ok) {
-    return {
-      ok: false,
-      mailbox: sharedMailbox,
-      connectedAs,
-      error: probe.error,
-      hint: probe.hint,
-    };
-  }
-
-  return {
-    ok: true,
-    mailbox: sharedMailbox,
-    connectedAs,
-    sampleCount: probe.messageCount,
-  };
 }
 
 export interface EmlImportResult {
@@ -530,10 +310,9 @@ export interface EmlImportResult {
 
 /** Import .eml files saved from Outlook — no Azure app registration required. */
 export async function importEmlFiles(
-  tenantId: string,
-  files: Array<{ name: string; content: string }>
+    files: Array<{ name: string; content: string }>
 ): Promise<EmlImportResult> {
-  if (!(await isEmailIngestionActive(tenantId))) {
+  if (!(await isEmailIngestionActive())) {
     return {
       imported: 0,
       skipped: 0,
@@ -545,7 +324,7 @@ export async function importEmlFiles(
   }
 
   const policy = await prisma.ingestionPolicy.findFirst({
-    where: { tenantId, source: "EMAIL", status: "ACTIVE" },
+    where: { source: "EMAIL", status: "ACTIVE" },
     select: { id: true },
   });
 
@@ -571,14 +350,14 @@ export async function importEmlFiles(
 
     const message = parsedEmlToEmailMessage(parsed);
 
-    const gongResult = await tryCorrelateGongEmail(tenantId, parsed);
+    const gongResult = await tryCorrelateGongEmail( parsed);
     if (gongResult.handled) {
       if (gongResult.correlated) imported++;
       else rejected++;
       continue;
     }
 
-    const replayResult = await tryIngestReplayEmail(tenantId, message);
+    const replayResult = await tryIngestReplayEmail( message);
     if (replayResult.handled) {
       if (replayResult.created || replayResult.upgraded) imported++;
       else skipped++;
@@ -587,7 +366,6 @@ export async function importEmlFiles(
 
     try {
       const result = await ingestEmailMessage(
-        tenantId,
         message,
         policy?.id,
         { importSource: "eml" }
@@ -602,8 +380,8 @@ export async function importEmlFiles(
     }
   }
 
-  const backfill = await backfillInternalCallReplays(tenantId);
-  const productAnnouncementsBackfill = await backfillProductAnnouncements(tenantId);
+  const backfill = await backfillInternalCallReplays();
+  const productAnnouncementsBackfill = await backfillProductAnnouncements();
 
   return { imported, skipped, rejected, errors, internalCallsBackfill: backfill, productAnnouncementsBackfill };
 }
@@ -630,19 +408,25 @@ function buildCalendarBody(event: CalendarEvent): string {
 }
 
 export async function ingestCalendarEvent(
-  tenantId: string,
-  event: CalendarEvent,
+    event: CalendarEvent,
   allowlistRef?: string,
   sourceFile?: string,
   options?: { importSource?: "archive" | "apple-calendar" }
 ): Promise<{ created: boolean; id: string }> {
   const body = buildCalendarBody(event);
-  const allowlist = await getActiveEmailAllowlist(tenantId);
+  const allowlist = await getActiveEmailAllowlist();
   const partnerDomains = [
     ...new Set(
       allowlist
         .map((rule) => rule.fromDomain?.toLowerCase())
         .filter((domain): domain is string => !!domain)
+    ),
+  ];
+  const partnerSubjectPrefixes = [
+    ...new Set(
+      allowlist
+        .map((rule) => rule.subjectPrefix?.trim())
+        .filter((prefix): prefix is string => !!prefix)
     ),
   ];
 
@@ -658,6 +442,7 @@ export async function ingestCalendarEvent(
     isRecurring: event.isRecurring,
     isAllDay: event.isAllDay,
     partnerDomains,
+    partnerSubjectPrefixes,
   });
 
   const isCalendarNoise =
@@ -712,9 +497,7 @@ export async function ingestCalendarEvent(
 
   const existing = await prisma.communication.findUnique({
     where: {
-      tenantId_source_externalId: {
-        tenantId,
-        source: "OUTLOOK_CALENDAR",
+      source_externalId: { source: "OUTLOOK_CALENDAR",
         externalId,
       },
     },
@@ -739,7 +522,7 @@ export async function ingestCalendarEvent(
         : "outlook-import",
     ],
     allowlistRef,
-    metadata: {
+    metadata: mergeCommunicationMetadata(existing?.metadata, {
       uid: event.uid,
       endTime: event.end?.toISOString(),
       location: event.location,
@@ -754,7 +537,7 @@ export async function ingestCalendarEvent(
       externalAttendees: analysis.externalAttendees,
       eventKind,
       requiresTravel: calendarRequiresTravelFlag(event),
-    },
+    }) as Prisma.InputJsonValue,
   };
 
   if (existing) {
@@ -764,7 +547,6 @@ export async function ingestCalendarEvent(
 
   const communication = await prisma.communication.create({
     data: {
-      tenantId,
       source: "OUTLOOK_CALENDAR",
       externalId,
       threadId: event.uid,
@@ -778,7 +560,6 @@ export async function ingestCalendarEvent(
 
     await prisma.nextStep.create({
       data: {
-        tenantId,
         communicationId: communication.id,
         title: analysis.suggestedAction,
         priority: analysis.priority,
@@ -800,11 +581,10 @@ export interface OutlookArchiveImportResult {
 
 /** Import Outlook .zip / .pst / .ics archives (email + calendar). */
 export async function importOutlookArchive(
-  tenantId: string,
-  filename: string,
+    filename: string,
   data: Buffer
 ): Promise<OutlookArchiveImportResult> {
-  if (!(await isEmailIngestionActive(tenantId))) {
+  if (!(await isEmailIngestionActive())) {
     return {
       emails: { imported: 0, skipped: 0, rejected: 0 },
       calendar: { imported: 0, skipped: 0, rejected: 0 },
@@ -837,11 +617,11 @@ export async function importOutlookArchive(
   }
 
   const policy = await prisma.ingestionPolicy.findFirst({
-    where: { tenantId, source: "EMAIL", status: "ACTIVE" },
+    where: { source: "EMAIL", status: "ACTIVE" },
     select: { id: true },
   });
 
-  const emailResult = await importEmlFiles(tenantId, extracted.emlFiles);
+  const emailResult = await importEmlFiles( extracted.emlFiles);
   const calendarResult = { imported: 0, skipped: 0, rejected: 0 };
   const errors = [...emailResult.errors];
 
@@ -849,7 +629,6 @@ export async function importOutlookArchive(
     for (const event of icsFile.events) {
       try {
         const result = await ingestCalendarEvent(
-          tenantId,
           event,
           policy?.id,
           icsFile.name
@@ -866,7 +645,7 @@ export async function importOutlookArchive(
   }
 
   if (calendarResult.imported > 0 || calendarResult.skipped > 0) {
-    await reconcileCalendarEventClusters(tenantId).catch(() => undefined);
+    await reconcileCalendarEventClusters().catch(() => undefined);
   }
 
   return {
@@ -890,14 +669,14 @@ export interface AppleMailImportResult {
   root: string;
   warnings: string[];
   errors: string[];
+  scanMethod?: "filesystem" | "envelope-index";
+  diagnostics?: string[];
   internalCallsBackfill?: BackfillInternalCallsResult;
   productAnnouncementsBackfill?: BackfillProductAnnouncementsResult;
 }
 
 /** Read local Apple Mail cache (~/Library/Mail) and import allowlisted messages. */
-export async function importFromAppleMail(
-  tenantId: string
-): Promise<AppleMailImportResult> {
+export async function importFromAppleMail(): Promise<AppleMailImportResult> {
   if (!appleMailImportEnabled()) {
     return {
       scanned: 0,
@@ -913,7 +692,7 @@ export async function importFromAppleMail(
     };
   }
 
-  if (!(await isEmailIngestionActive(tenantId))) {
+  if (!(await isEmailIngestionActive())) {
     return {
       scanned: 0,
       candidates: 0,
@@ -947,7 +726,7 @@ export async function importFromAppleMail(
   }
 
   const policy = await prisma.ingestionPolicy.findFirst({
-    where: { tenantId, source: "EMAIL", status: "ACTIVE" },
+    where: { source: "EMAIL", status: "ACTIVE" },
     select: { id: true },
   });
 
@@ -966,14 +745,14 @@ export async function importFromAppleMail(
 
     const message = parsedEmlToEmailMessage(parsed);
 
-    const gongResult = await tryCorrelateGongEmail(tenantId, parsed);
+    const gongResult = await tryCorrelateGongEmail( parsed);
     if (gongResult.handled) {
       if (gongResult.correlated) imported++;
       else rejected++;
       continue;
     }
 
-    const replayResult = await tryIngestReplayEmail(tenantId, message);
+    const replayResult = await tryIngestReplayEmail( message);
     if (replayResult.handled) {
       if (replayResult.created || replayResult.upgraded) imported++;
       else skipped++;
@@ -982,7 +761,6 @@ export async function importFromAppleMail(
 
     try {
       const result = await ingestEmailMessage(
-        tenantId,
         message,
         policy?.id,
         { importSource: "apple-mail" }
@@ -997,8 +775,8 @@ export async function importFromAppleMail(
     }
   }
 
-  const backfill = await backfillInternalCallReplays(tenantId);
-  const productAnnouncementsBackfill = await backfillProductAnnouncements(tenantId);
+  const backfill = await backfillInternalCallReplays();
+  const productAnnouncementsBackfill = await backfillProductAnnouncements();
 
   return {
     scanned: scan.filesScanned,
@@ -1009,6 +787,8 @@ export async function importFromAppleMail(
     root: scan.root,
     warnings: scan.warnings,
     errors: errors.slice(0, 20),
+    scanMethod: scan.scanMethod,
+    diagnostics: scan.diagnostics,
     internalCallsBackfill: backfill,
     productAnnouncementsBackfill,
   };
@@ -1025,9 +805,7 @@ export interface AppleCalendarImportResult {
 }
 
 /** Read events from Apple Calendar.app via EventKit and import allowlisted items. */
-export async function importFromAppleCalendar(
-  tenantId: string
-): Promise<AppleCalendarImportResult> {
+export async function importFromAppleCalendar(): Promise<AppleCalendarImportResult> {
   if (!appleCalendarImportEnabled()) {
     return {
       calendars: [],
@@ -1042,7 +820,7 @@ export async function importFromAppleCalendar(
     };
   }
 
-  if (!(await isEmailIngestionActive(tenantId))) {
+  if (!(await isEmailIngestionActive())) {
     return {
       calendars: [],
       candidates: 0,
@@ -1072,7 +850,7 @@ export async function importFromAppleCalendar(
   }
 
   const policy = await prisma.ingestionPolicy.findFirst({
-    where: { tenantId, source: "EMAIL", status: "ACTIVE" },
+    where: { source: "EMAIL", status: "ACTIVE" },
     select: { id: true },
   });
 
@@ -1086,7 +864,6 @@ export async function importFromAppleCalendar(
 
     try {
       const result = await ingestCalendarEvent(
-        tenantId,
         event,
         policy?.id,
         raw.calendar,
@@ -1103,7 +880,7 @@ export async function importFromAppleCalendar(
   }
 
   if (imported > 0 || skipped > 0) {
-    await reconcileCalendarEventClusters(tenantId).catch(() => undefined);
+    await reconcileCalendarEventClusters().catch(() => undefined);
   }
 
   return {

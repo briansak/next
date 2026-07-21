@@ -67,6 +67,25 @@ describe("extractReplayUrl", () => {
       "If you missed it, watch the replay here https://app.campaignmgr.cisco.com/e/er?s=123";
     expect(extractReplayUrl(text)).toContain("campaignmgr.cisco.com");
   });
+
+  it("prefers Vidcast share links over Cisco campaign bridge links", () => {
+    const text = `
+      Check out the replay on the Bridge.
+      https://app.campaignmgr.cisco.com/e/er?s=1865283171&lid=196444
+      https://app.vidcast.io/share/f91d1f86-a05b-494f-bde1-80cbe120a973
+    `;
+    expect(extractReplayUrl(text)).toBe(
+      "https://app.vidcast.io/share/f91d1f86-a05b-494f-bde1-80cbe120a973"
+    );
+  });
+
+  it("extracts Bridge replay URL after sentence with eloqua tracking params", () => {
+    const text =
+      'Check out the replay on the Bridge. https://app.campaignmgr.cisco.com/e/er?s=1865283171&lid=185329&elqTrackId=50385A8B845B728D9E9775390093BEED&elq=d69873f1e1c54663bb95873d5fede5e2&elqaid=55826&elqat=1&elqak=8AF5B98259649158A16EB5F0AF306649"01E2168856E23D77B35469C283DFBCB7133C';
+    expect(extractReplayUrl(text)).toBe(
+      "https://app.campaignmgr.cisco.com/e/er?s=1865283171&lid=185329&elqTrackId=50385A8B845B728D9E9775390093BEED&elq=d69873f1e1c54663bb95873d5fede5e2&elqaid=55826&elqat=1&elqak=8AF5B98259649158A16EB5F0AF306649"
+    );
+  });
 });
 
 describe("extractReplayEmailSummary", () => {

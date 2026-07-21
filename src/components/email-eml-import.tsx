@@ -119,8 +119,11 @@ export function EmailEmlImport({
     }
 
     setResult(
-      `Apple Mail: scanned ${data.filesScanned ?? data.scanned ?? 0}, candidates ${data.candidates ?? 0}, imported ${data.imported ?? 0}, updated ${data.skipped ?? 0}, rejected ${data.rejected ?? 0}${data.root ? ` · ${data.root}` : ""}`
+      `Apple Mail (${data.scanMethod ?? "envelope-index"}): scanned ${data.scanned ?? data.filesScanned ?? 0}, candidates ${data.candidates ?? 0}, imported ${data.imported ?? 0}, updated ${data.skipped ?? 0}, rejected ${data.rejected ?? 0}${data.root ? ` · ${data.root}` : ""} — may take up to 60s`
     );
+    if (data.diagnostics?.length) {
+      setWarnings((current) => [...data.diagnostics, ...current]);
+    }
     if (data.warnings?.length) setWarnings(data.warnings);
     if (data.errors?.length) setErrors(data.errors.slice(0, 15));
     router.refresh();
@@ -261,8 +264,8 @@ export function EmailEmlImport({
               margin: 0,
             }}
           >
-            Activate the email policy first. Partner rules (@wwt.com, [WWT]) boost priority
-            on My Priorities but do not block imports.
+            Activate the email policy first. Configure partner domains and subject prefixes
+            above, then activate the policy to import mail and calendar files.
           </p>
         )}
       </form>

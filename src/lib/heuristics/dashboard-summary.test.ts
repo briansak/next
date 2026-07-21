@@ -8,7 +8,6 @@ import {
 function item(overrides: Partial<DashboardSummaryItem>): DashboardSummaryItem {
   return {
     id: "c1",
-    tenantId: "t1",
     source: "EMAIL",
     subject: "Partner sync",
     body: "When can we schedule the onsite visit? Please confirm by Friday.",

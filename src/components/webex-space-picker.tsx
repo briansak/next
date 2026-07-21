@@ -2,13 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-
-interface WebexSpace {
-  id: string;
-  title: string;
-  type: string;
-  lastActivity?: string;
-}
+import { spaceListSubtitle } from "@/lib/integrations/webex/space-display";
+import { useWebexSpaces, type WebexSpaceListItem } from "@/components/use-webex-spaces";
 
 interface AllowlistEntry {
   id: string;
@@ -24,15 +19,16 @@ export function WebexSpacePicker({
   policyStatus: string;
 }) {
   const router = useRouter();
-  const [spaces, setSpaces] = useState<WebexSpace[]>([]);
-  const [allowlist, setAllowlist] = useState<AllowlistEntry[]>([]);
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  const { allSpaces, spaces, totalFetched, truncated, loading, error: spacesError } =
+    useWebexSpaces(query);
+  const [allowlist, setAllowlist] = useState<AllowlistEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [status, setStatus] = useState(policyStatus);
 
   const allowlistedIds = new Set(allowlist.map((a) => a.spaceId));
+  const displayError = error ?? spacesError;
 
   const loadAllowlist = useCallback(async () => {
     const res = await fetch("/api/integrations/webex/allowlist?purpose=PRIORITIES");
@@ -42,32 +38,11 @@ export function WebexSpacePicker({
     if (data.status) setStatus(data.status);
   }, []);
 
-  const loadSpaces = useCallback(async (q: string) => {
-    setLoading(true);
-    setError(null);
-    const params = q ? `?q=${encodeURIComponent(q)}` : "";
-    const res = await fetch(`/api/integrations/webex/spaces${params}`);
-    setLoading(false);
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data.error ?? "Failed to load spaces");
-      return;
-    }
-    const data = await res.json();
-    setSpaces(data.spaces ?? []);
-  }, []);
-
   useEffect(() => {
     loadAllowlist();
-    loadSpaces("");
-  }, [loadAllowlist, loadSpaces]);
+  }, [loadAllowlist]);
 
-  useEffect(() => {
-    const t = setTimeout(() => loadSpaces(query), 300);
-    return () => clearTimeout(t);
-  }, [query, loadSpaces]);
-
-  async function toggleSpace(space: WebexSpace) {
+  async function toggleSpace(space: WebexSpaceListItem) {
     setBusyId(space.id);
     const isListed = allowlistedIds.has(space.id);
     const res = await fetch("/api/integrations/webex/allowlist", {
@@ -111,11 +86,25 @@ export function WebexSpacePicker({
         <h3 style={{ fontSize: "0.875rem", fontWeight: 600 }}>Day-job spaces (My Priorities)</h3>
         <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
           Policy: {status} · Selected: {allowlist.length}
+          {totalFetched > 0 ? ` · ${totalFetched} Webex spaces loaded` : ""}
         </span>
       </div>
 
-      {error && (
-        <p style={{ color: "var(--critical)", fontSize: "0.875rem", marginBottom: "0.75rem" }}>{error}</p>
+      <p
+        style={{
+          color: "var(--text-muted)",
+          fontSize: "0.75rem",
+          marginBottom: "0.75rem",
+          lineHeight: 1.5,
+        }}
+      >
+        Only spaces you are a member of (under the connected Webex account) appear here.
+        Map a space to ingest its messages into My Priorities.
+        {truncated ? " Some older spaces may be omitted — use search to narrow the list." : ""}
+      </p>
+
+      {displayError && (
+        <p style={{ color: "var(--critical)", fontSize: "0.875rem", marginBottom: "0.75rem" }}>{displayError}</p>
       )}
 
       {allowlist.length > 0 && (
@@ -234,10 +223,7 @@ export function WebexSpacePicker({
                     {space.title}
                   </p>
                   <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                    {space.type}
-                    {space.lastActivity && (
-                      <> · Last active {formatRelative(space.lastActivity)}</>
-                    )}
+                    {spaceListSubtitle(space, allSpaces)}
                   </p>
                 </div>
                 <button
@@ -298,16 +284,4 @@ export function WebexSpacePicker({
       )}
     </div>
   );
-}
-
-function formatRelative(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
 }

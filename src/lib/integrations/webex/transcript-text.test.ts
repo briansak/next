@@ -18,6 +18,24 @@ Let's review the PSA update.`;
     );
   });
 
+  it("strips Webex speaker metadata from VTT", () => {
+    const vtt = `WEBVTT
+
+1
+1 "Brian Sak" (1984217600)
+00:00:01.000 --> 00:00:05.000
+Up and down, so we'll see how well this works out.
+
+2
+2 "Ken Daniels" (1234567890)
+00:00:06.000 --> 00:00:10.000
+We got the secure networking SKUs moved over last month.`;
+
+    expect(parseTranscriptContent(vtt)).toBe(
+      "Up and down, so we'll see how well this works out. We got the secure networking SKUs moved over last month."
+    );
+  });
+
   it("normalizes plain text", () => {
     expect(parseTranscriptContent("  Line one\n\nLine   two  ")).toBe(
       "Line one Line two"

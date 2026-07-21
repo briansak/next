@@ -4,6 +4,11 @@
  * wrap these same endpoints — see docs/WEBEX_INGESTION.md.
  */
 
+import {
+  dedupeSpacesById,
+  filterSpacesByQuery,
+} from "./space-display";
+
 const WEBEX_API = "https://webexapis.com/v1";
 
 export interface WebexConfig {
@@ -57,8 +62,9 @@ export interface WebexSpaceAllowlistEntry {
   id?: string;
   spaceId: string;
   spaceTitle?: string;
-  purpose?: "PRIORITIES" | "TECHNOLOGY";
+  purpose?: "PRIORITIES" | "DEAL" | "TECHNOLOGY";
   technologyLabel?: string;
+  dealLabel?: string;
 }
 
 export interface WebexWebhookPayload {
@@ -237,35 +243,76 @@ export async function refreshWebexToken(
   };
 }
 
-export async function listSpaces(
-  accessToken: string,
-  options?: { query?: string; max?: number }
-): Promise<WebexSpace[]> {
-  const url = new URL(`${WEBEX_API}/rooms`);
-  url.searchParams.set("sortBy", "lastactivity");
-  url.searchParams.set("max", String(options?.max ?? 100));
+export function parseWebexNextLink(linkHeader: string | null): string | null {
+  if (!linkHeader) return null;
 
-  const response = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Webex rooms API error: ${response.status}`);
+  for (const segment of linkHeader.split(",")) {
+    const match = segment.match(/<([^>]+)>\s*;\s*rel="next"/i);
+    if (match?.[1]) return match[1];
   }
 
-  const data = (await response.json()) as { items: WebexSpace[] };
-  let items = data.items ?? [];
+  return null;
+}
 
-  if (options?.query) {
-    const q = options.query.toLowerCase();
-    items = items.filter((s) => s.title.toLowerCase().includes(q));
-  }
 
-  return items.sort((a, b) => {
+function sortSpacesByActivity(spaces: WebexSpace[]): WebexSpace[] {
+  return [...spaces].sort((a, b) => {
     const aTime = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
     const bTime = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
     return bTime - aTime;
   });
+}
+
+export interface ListSpacesResult {
+  spaces: WebexSpace[];
+  totalFetched: number;
+  truncated: boolean;
+  /** Raw item count before deduplication (diagnostics). */
+  rawCount?: number;
+}
+
+export async function listSpaces(
+  accessToken: string,
+  options?: { query?: string; pageSize?: number; maxPages?: number }
+): Promise<ListSpacesResult> {
+  const pageSize = Math.min(Math.max(options?.pageSize ?? 100, 1), 100);
+  const maxPages = options?.maxPages ?? 50;
+  const all: WebexSpace[] = [];
+
+  let nextUrl: string | null = `${WEBEX_API}/rooms?sortBy=lastactivity&max=${pageSize}`;
+  let pages = 0;
+  let truncated = false;
+
+  while (nextUrl && pages < maxPages) {
+    const response = await fetch(nextUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Webex rooms API error: ${response.status}`);
+    }
+
+    const data = (await response.json()) as { items: WebexSpace[] };
+    all.push(...(data.items ?? []));
+
+    nextUrl = parseWebexNextLink(response.headers.get("Link"));
+    pages += 1;
+
+    if (nextUrl && pages >= maxPages) {
+      truncated = true;
+    }
+  }
+
+  const rawCount = all.length;
+  const unique = dedupeSpacesById(all);
+  const totalFetched = unique.length;
+  let spaces = sortSpacesByActivity(unique);
+
+  if (options?.query) {
+    spaces = filterSpacesByQuery(spaces, options.query);
+  }
+
+  return { spaces, totalFetched, truncated, rawCount };
 }
 
 /** @deprecated Use listSpaces */
@@ -273,7 +320,8 @@ export async function searchSpaces(
   accessToken: string,
   query?: string
 ): Promise<WebexSpace[]> {
-  return listSpaces(accessToken, { query });
+  const result = await listSpaces(accessToken, { query });
+  return result.spaces;
 }
 
 export async function fetchAllowlistedMessages(

@@ -215,6 +215,7 @@ function extractReplayLinksFromPlainText(text: string): string[] {
   const inlinePatterns = [
     /\bwatch(?:\s+the)?\s+replay(?:\s+on\s+the\s+bridge)?\s+here\s*(?:[:.]?\s*)?(?:<\s*)?(https?:\/\/[^\s<>")]+)/gi,
     /\b(?:catch|check out)(?:\s+the)?\s+replay(?:\s+on\s+the\s+bridge)?\s*(?:[:.]?\s*)?(?:<\s*)?(https?:\/\/[^\s<>")]+)/gi,
+    /\bcheck out the replay(?:\s+on\s+the\s+bridge)?\.\s*(https?:\/\/[^\s<>")]+)/gi,
     /\bview(?:\s+the)?\s+recording\s+here\s*(?:[:.]?\s*)?(?:<\s*)?(https?:\/\/[^\s<>")]+)/gi,
   ];
 
@@ -254,7 +255,12 @@ function extractUrls(text: string): string[] {
 }
 
 function sanitizeUrl(url: string): string {
-  return url.replace(/^[<\[\(]+|[>\]\),.;]+$/g, "").trim();
+  let clean = url.replace(/^[<\[\(]+|[>\]\),.;]+$/g, "").trim();
+  const quoteIndex = clean.indexOf('"');
+  if (quoteIndex > 0) {
+    clean = clean.slice(0, quoteIndex);
+  }
+  return clean.trim();
 }
 
 function scoreReplayUrl(url: string, context: string): number {
@@ -264,18 +270,26 @@ function scoreReplayUrl(url: string, context: string): number {
   let score = 0;
   const platform = detectReplayPlatform(clean);
   if (platform) score += 5;
+  if (platform === "vidcast" && /\/share\//i.test(clean)) score += 8;
+  if (platform === "cisco" && /campaignmgr\.cisco\.com/i.test(clean)) score -= 2;
   if (/\/(replay|recording|recordings|watch|play|video|calls?)\b/i.test(clean)) {
     score += 4;
   }
   const contextNearUrl = extractContextAroundUrl(context, clean, 120);
-  if (/watch the replay|watch the recording|view the replay|catch the replay/i.test(contextNearUrl)) {
+  if (
+    /watch the replay|watch the recording|view the replay|catch the replay|check out the replay/i.test(
+      contextNearUrl
+    )
+  ) {
     score += 6;
   } else if (/watch(?:\s+the)?\s+replay\s+here|replay\s+here/i.test(contextNearUrl)) {
     score += 5;
   } else if (/watch|replay|recording|play/i.test(contextNearUrl)) {
     score += 2;
   }
-  if (/en25\.com|\.eloqua\.|elqTrackId/i.test(clean)) score -= 8;
+  const isCiscoBridgeLink = platform === "cisco";
+  if (!isCiscoBridgeLink && /en25\.com|\.eloqua\.|elqTrackId/i.test(clean)) score -= 8;
+  if (isCiscoBridgeLink && /replay|bridge/i.test(contextNearUrl)) score += 3;
   if (/unsubscribe|privacy|preferences|tracking/i.test(clean)) score -= 10;
   if (platform === "sharepoint" && /bridge|replay/i.test(context)) score += 3;
   return score;

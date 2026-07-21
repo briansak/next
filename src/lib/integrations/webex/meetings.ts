@@ -49,6 +49,8 @@ export interface WebexRecording {
   temporaryDirectDownloadLinks?: {
     recordingDownloadLink?: string;
     audioDownloadLink?: string;
+    transcriptDownloadLink?: string;
+    expiration?: string;
   };
 }
 
@@ -200,25 +202,69 @@ export async function getMeetingSummaries(
   return [];
 }
 
+export function recordingMatchesMeeting(
+  recording: WebexRecording,
+  meeting: WebexMeeting
+): boolean {
+  if (recording.meetingId === meeting.id) return true;
+
+  const meetingSeriesId =
+    meeting.meetingSeriesId ?? meeting.id.split("_I_")[0];
+  if (recording.meetingSeriesId && recording.meetingSeriesId === meetingSeriesId) {
+    return true;
+  }
+
+  const prefix = meeting.id.split("_I_")[0];
+  return Boolean(recording.meetingId?.startsWith(prefix));
+}
+
 export async function listMeetingRecordings(
   accessToken: string,
-  meetingId: string,
+  meeting: WebexMeeting,
   from?: string,
   to?: string
 ): Promise<WebexRecording[]> {
-  const data = await webexGet<{ items: WebexRecording[] }>(
-    accessToken,
-    "/recordings",
-    {
-      from: from ?? daysAgoIso(),
-      to: to ?? new Date().toISOString(),
-      max: "50",
-    }
-  );
+  const range = {
+    from: from ?? daysAgoIso(),
+    to: to ?? new Date().toISOString(),
+  };
+  const found = new Map<string, WebexRecording>();
 
-  return (data?.items ?? []).filter(
-    (r) => !r.meetingId || r.meetingId === meetingId
-  );
+  const meetingIds = new Set<string>([meeting.id]);
+  const seriesId = meeting.meetingSeriesId ?? meeting.id.split("_I_")[0];
+  if (seriesId) meetingIds.add(seriesId);
+
+  for (const meetingId of meetingIds) {
+    const data = await webexGet<{ items: WebexRecording[] }>(
+      accessToken,
+      "/recordings",
+      {
+        ...range,
+        meetingId,
+        max: "50",
+      }
+    );
+    for (const recording of data?.items ?? []) {
+      if (recordingMatchesMeeting(recording, meeting)) {
+        found.set(recording.id, recording);
+      }
+    }
+  }
+
+  if (found.size === 0 && meeting.hasRecording) {
+    const data = await webexGet<{ items: WebexRecording[] }>(
+      accessToken,
+      "/recordings",
+      { ...range, max: "100" }
+    );
+    for (const recording of data?.items ?? []) {
+      if (recordingMatchesMeeting(recording, meeting)) {
+        found.set(recording.id, recording);
+      }
+    }
+  }
+
+  return [...found.values()];
 }
 
 export async function getRecordingDetails(
@@ -249,7 +295,7 @@ export async function enrichMeeting(
       listMeetingInvitees(accessToken, meeting.id).catch(() => []),
       listMeetingParticipants(accessToken, meeting.id).catch(() => []),
       getMeetingSummaries(accessToken, meeting.id).catch(() => []),
-      listMeetingRecordings(accessToken, meeting.id).catch(() => []),
+      listMeetingRecordings(accessToken, meeting).catch(() => []),
       listMeetingTranscripts(accessToken, meeting.id).catch(() => []),
     ]);
 
@@ -393,6 +439,33 @@ export function recordingDownloadUrl(recording: WebexRecording): string | undefi
     recording.temporaryDirectDownloadLinks?.audioDownloadLink ??
     recording.downloadUrl ??
     recording.playbackUrl
+  );
+}
+
+export function recordingPlaybackUrl(recording: WebexRecording): string | undefined {
+  return recording.playbackUrl ?? recordingDownloadUrl(recording);
+}
+
+export function recordingTranscriptDownloadUrl(
+  recording: WebexRecording
+): string | undefined {
+  return recording.temporaryDirectDownloadLinks?.transcriptDownloadLink;
+}
+
+export function meetingRecordingHref(meta: {
+  recordingDownloadUrl?: string;
+  recordingPlaybackUrl?: string;
+  replayUrl?: string;
+  gongReplayUrl?: string;
+  webLink?: string;
+  hasRecording?: boolean;
+}): string | undefined {
+  return (
+    meta.recordingDownloadUrl ??
+    meta.recordingPlaybackUrl ??
+    meta.replayUrl ??
+    meta.gongReplayUrl ??
+    (meta.hasRecording ? meta.webLink : undefined)
   );
 }
 

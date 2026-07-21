@@ -1,8 +1,13 @@
-import { access, readdir, readFile, stat } from "fs/promises";
+import { access, readdir, readFile, stat, lstat } from "fs/promises";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { emlxToEml } from "./emlx";
 import { splitMbox } from "./mbox";
+import {
+  diagnoseAppleMailAccess,
+  envelopeIndexPreferred,
+  scanAppleMailViaEnvelopeIndex,
+} from "./apple-mail-envelope";
 
 const MAX_APPLE_MAIL_MESSAGES = 2000;
 const DEFAULT_LOOKBACK_DAYS = 14;
@@ -18,6 +23,8 @@ export interface AppleMailScanResult {
   filesScanned: number;
   messages: AppleMailMessageFile[];
   warnings: string[];
+  scanMethod?: "filesystem" | "envelope-index";
+  diagnostics?: string[];
 }
 
 export function appleMailImportEnabled(): boolean {
@@ -76,9 +83,37 @@ export async function scanAppleMailMessages(
     options?.lookbackDays ??
     Number(process.env.APPLE_MAIL_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
 
+  if (envelopeIndexPreferred()) {
+    const envelope = await scanAppleMailViaEnvelopeIndex({
+      lookbackDays,
+      maxMessages: MAX_APPLE_MAIL_MESSAGES,
+    });
+
+    if (envelope.messages.length > 0 || envelope.envelopeRows > 0) {
+      return {
+        root: envelope.root,
+        filesScanned: envelope.filesScanned,
+        messages: envelope.messages,
+        warnings: envelope.warnings,
+        scanMethod: "envelope-index",
+        diagnostics: await diagnoseAppleMailAccess(),
+      };
+    }
+  }
+
+  return scanAppleMailFilesystem({ root, lookbackDays });
+}
+
+async function scanAppleMailFilesystem(input: {
+  root: string;
+  lookbackDays: number;
+}): Promise<AppleMailScanResult> {
+  const { root, lookbackDays } = input;
   const warnings: string[] = [];
   const messages: AppleMailMessageFile[] = [];
   let filesScanned = 0;
+  let emlxSeen = 0;
+  let emlxInLookback = 0;
 
   if (!(await pathExists(root))) {
     return {
@@ -88,6 +123,7 @@ export async function scanAppleMailMessages(
       warnings: [
         `Apple Mail directory not found at ${root}. Add the account in Mail.app and sync first.`,
       ],
+      scanMethod: "filesystem",
     };
   }
 
@@ -96,7 +132,6 @@ export async function scanAppleMailMessages(
     warnings.push(
       `No Mail data found under ${root}. Open Mail.app, add your account, and wait for messages to download.`
     );
-    return { root, filesScanned, messages, warnings };
   }
 
   const cutoff =
@@ -111,10 +146,12 @@ export async function scanAppleMailMessages(
       const lower = fileName.toLowerCase();
       if (lower.endsWith(".emlx") || lower.endsWith(".partial.emlx")) {
         filesScanned++;
+        emlxSeen++;
         const raw = await readFile(filePath, "utf8");
         const eml = emlxToEml(raw);
         if (!eml.trim()) return;
         if (cutoff > 0 && !messageMaybeInLookback(eml, cutoff)) return;
+        emlxInLookback++;
         messages.push({
           name: fileName,
           content: eml,
@@ -148,13 +185,28 @@ export async function scanAppleMailMessages(
     });
   }
 
-  if (messages.length === 0 && warnings.length === 0) {
-    warnings.push(
-      "No .emlx or mbox messages found. Mail.app may still be syncing, or macOS privacy blocked read access (grant Full Disk Access to your terminal/Node)."
-    );
+  const diagnostics = await diagnoseAppleMailAccess();
+
+  if (messages.length === 0) {
+    if (emlxSeen > 0 && emlxInLookback === 0) {
+      warnings.push(
+        `Found ${emlxSeen} .emlx file(s) on disk but none within the last ${lookbackDays} day lookback. Increase APPLE_MAIL_LOOKBACK_DAYS.`
+      );
+    } else if (emlxSeen === 0) {
+      warnings.push(
+        "No .emlx files found. Try envelope import (default) or grant Full Disk Access to Cursor.app and restart."
+      );
+    }
   }
 
-  return { root, filesScanned, messages, warnings };
+  return {
+    root,
+    filesScanned,
+    messages,
+    warnings,
+    scanMethod: "filesystem",
+    diagnostics,
+  };
 }
 
 async function listMailVersionDirs(root: string): Promise<string[]> {
@@ -180,8 +232,21 @@ async function walkMailTree(
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
       await walkMailTree(path, onFile);
-    } else if (entry.isFile()) {
+      continue;
+    }
+
+    if (entry.isFile()) {
       await onFile(path, entry.name);
+      continue;
+    }
+
+    if (entry.isSymbolicLink()) {
+      const linkStat = await lstat(path).catch(() => null);
+      if (linkStat?.isDirectory()) {
+        await walkMailTree(path, onFile);
+      } else if (linkStat?.isFile()) {
+        await onFile(path, entry.name);
+      }
     }
   }
 }

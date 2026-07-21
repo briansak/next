@@ -54,6 +54,27 @@ Action items:
     expect(parsed?.actionItems.length).toBeGreaterThanOrEqual(1);
     expect(parsed?.replayUrl).toBeNull();
   });
+
+  it("extracts transcript sections from Gong emails", () => {
+    const parsed = parseGongEmail({
+      messageId: "gong-2",
+      subject: "Call recap: Partner sync",
+      fromAddress: "notifications@gong.io",
+      receivedAt: new Date("2026-07-14T18:00:00Z"),
+      body: `Summary:
+Quick sync on pipeline.
+
+Transcript:
+Alice: We need to finalize the partner deck before Friday.
+Bob: I will share the updated pricing slides after this call.
+
+Action items:
+- Bob to send pricing slides`,
+    });
+
+    expect(parsed?.transcript).toContain("Alice:");
+    expect(parsed?.transcript).toContain("pricing slides");
+  });
 });
 
 describe("extractGongReplayUrl", () => {

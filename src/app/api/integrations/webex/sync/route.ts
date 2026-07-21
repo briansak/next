@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { getAuthSession } from "@/lib/auth";
-import { requireAdmin } from "@/lib/tenant";
 import {
   registerWebexWebhooks,
   syncWebexMessages,
@@ -14,12 +13,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    requireAdmin({
-      tenantId: session.tenantId,
-      userId: session.userId,
-      role: session.role,
-    });
-  } catch {
+      } catch {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -28,12 +22,12 @@ export async function POST(request: Request) {
 
   try {
     if (action === "register-webhooks") {
-      const webhookIds = await registerWebexWebhooks(session.tenantId);
+      const webhookIds = await registerWebexWebhooks();
       return NextResponse.json({ ok: true, webhookIds });
     }
 
-    const messages = await syncWebexMessages(session.tenantId);
-    const meetings = await syncWebexMeetings(session.tenantId);
+    const messages = await syncWebexMessages();
+    const meetings = await syncWebexMeetings();
 
     return NextResponse.json({ ok: true, ...messages, meetings });
   } catch (err) {

@@ -1,5 +1,7 @@
 import type { CommunicationSource, Prisma } from "@prisma/client";
+import type { OllamaRuntimeSettings } from "@/lib/config/app-config";
 import { summarizeMeetingTranscript, summarizeWithOllama } from "./ollama";
+import { buildHeuristicTranscriptSummary } from "./transcript-summary";
 import {
   condenseLongSummary,
   distillEmailDigest,
@@ -39,7 +41,6 @@ interface SummaryMetadata {
 
 export interface DashboardSummaryItem {
   id: string;
-  tenantId: string;
   source: CommunicationSource;
   subject: string | null;
   body: string;
@@ -49,8 +50,8 @@ export interface DashboardSummaryItem {
   metadata: unknown;
 }
 
-export function dashboardSummariesEnabled(): boolean {
-  return Boolean(process.env.OLLAMA_BASE_URL?.trim());
+export function dashboardSummariesEnabled(ollamaBaseUrl?: string | null): boolean {
+  return Boolean(ollamaBaseUrl?.trim() || process.env.OLLAMA_BASE_URL?.trim());
 }
 
 function stripHtml(html: string): string {
@@ -110,7 +111,8 @@ export function buildHeuristicDashboardSummary(
 }
 
 function meetingSummaryFromMetadata(
-  meta: SummaryMetadata
+  meta: SummaryMetadata,
+  meetingTitle?: string | null
 ): DashboardSummary | null {
   const gong = meta.gongSummaryText?.trim();
   if (gong) {
@@ -127,15 +129,32 @@ function meetingSummaryFromMetadata(
     const source =
       meta.summarySource === "ollama"
         ? "ollama"
-        : meta.summarySource === "gong"
-          ? "gong"
-          : "webex-ai";
+        : meta.summarySource === "heuristic"
+          ? "heuristic"
+          : meta.summarySource === "gong"
+            ? "gong"
+            : "webex-ai";
     return {
       text: summary,
       source,
       label: DASHBOARD_SUMMARY_LABELS[source],
       fromCache: true,
     };
+  }
+
+  if (meta.transcriptText?.trim()) {
+    const derived = buildHeuristicTranscriptSummary(
+      meetingTitle?.trim() || "Meeting",
+      meta.transcriptText
+    );
+    if (derived.text) {
+      return {
+        text: derived.text,
+        source: "heuristic",
+        label: DASHBOARD_SUMMARY_LABELS.heuristic,
+        fromCache: true,
+      };
+    }
   }
 
   return null;
@@ -220,7 +239,7 @@ export function pickExistingDashboardSummary(
   const meta = (item.metadata ?? {}) as SummaryMetadata;
 
   if (item.source === "WEBEX_MEETING") {
-    const meeting = meetingSummaryFromMetadata(meta);
+    const meeting = meetingSummaryFromMetadata(meta, item.subject);
     if (meeting?.source === "gong") return meeting;
   }
 
@@ -228,7 +247,7 @@ export function pickExistingDashboardSummary(
   if (cached) return cached;
 
   if (item.source === "WEBEX_MEETING") {
-    return meetingSummaryFromMetadata(meta);
+    return meetingSummaryFromMetadata(meta, item.subject);
   }
 
   return null;
@@ -236,9 +255,10 @@ export function pickExistingDashboardSummary(
 
 export async function resolveDashboardSummary(
   item: DashboardSummaryItem,
-  options?: { allowOllama?: boolean }
+  options?: { allowOllama?: boolean; ollamaRuntime?: OllamaRuntimeSettings | null }
 ): Promise<DashboardSummary> {
   const allowOllama = options?.allowOllama !== false;
+  const ollamaRuntime = options?.ollamaRuntime ?? null;
   const existing = pickExistingDashboardSummary(item);
   if (existing) {
     const condensed = condenseLongSummary(existing.text, item.subject ?? undefined);
@@ -273,7 +293,8 @@ export async function resolveDashboardSummary(
     if (meta.transcriptText?.trim()) {
       const transcriptSummary = await summarizeMeetingTranscript(
         meta.transcriptText,
-        item.subject ?? "Meeting"
+        item.subject ?? "Meeting",
+        ollamaRuntime
       );
       if (transcriptSummary?.summary) {
         return {
@@ -286,12 +307,15 @@ export async function resolveDashboardSummary(
     }
   }
 
-  if (allowOllama && dashboardSummariesEnabled()) {
-    const ai = await summarizeWithOllama({
-      subject: item.subject ?? undefined,
-      body,
-      context: buildSummaryContext(item),
-    });
+  if (allowOllama && dashboardSummariesEnabled(ollamaRuntime?.baseUrl)) {
+    const ai = await summarizeWithOllama(
+      {
+        subject: item.subject ?? undefined,
+        body,
+        context: buildSummaryContext(item),
+      },
+      ollamaRuntime
+    );
     if (ai?.summary?.trim()) {
       return {
         text: ai.summary.trim(),
@@ -351,11 +375,17 @@ async function mapWithConcurrency<T, R>(
 
 export async function resolveDashboardSummaries(
   items: DashboardSummaryItem[],
-  options?: { maxGenerations?: number; concurrency?: number; allowOllama?: boolean }
+  options?: {
+    maxGenerations?: number;
+    concurrency?: number;
+    allowOllama?: boolean;
+    ollamaRuntime?: OllamaRuntimeSettings | null;
+  }
 ): Promise<Map<string, DashboardSummary>> {
   const maxGenerations = options?.maxGenerations ?? 12;
   const concurrency = options?.concurrency ?? 4;
   const allowOllama = options?.allowOllama !== false;
+  const ollamaRuntime = options?.ollamaRuntime ?? null;
   const result = new Map<string, DashboardSummary>();
 
   const immediate: DashboardSummaryItem[] = [];
@@ -372,7 +402,7 @@ export async function resolveDashboardSummaries(
 
   const toGenerate = needsGeneration.slice(0, maxGenerations);
   const generated = await mapWithConcurrency(toGenerate, concurrency, async (item) => {
-    const summary = await resolveDashboardSummary(item, { allowOllama });
+    const summary = await resolveDashboardSummary(item, { allowOllama, ollamaRuntime });
     await persistDashboardSummary(item, summary).catch(() => undefined);
     return { id: item.id, summary };
   });

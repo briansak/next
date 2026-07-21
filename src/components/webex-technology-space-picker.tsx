@@ -2,13 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-
-interface WebexSpace {
-  id: string;
-  title: string;
-  type: string;
-  lastActivity?: string;
-}
+import { spaceListSubtitle } from "@/lib/integrations/webex/space-display";
+import { useWebexSpaces, type WebexSpaceListItem } from "@/components/use-webex-spaces";
 
 interface AllowlistEntry {
   id: string;
@@ -33,16 +28,17 @@ export function WebexTechnologySpacePicker({
   policyStatus: string;
 }) {
   const router = useRouter();
-  const [spaces, setSpaces] = useState<WebexSpace[]>([]);
-  const [allowlist, setAllowlist] = useState<AllowlistEntry[]>([]);
   const [query, setQuery] = useState("");
+  const { allSpaces, spaces, totalFetched, truncated, loading, error: spacesError } =
+    useWebexSpaces(query);
+  const [allowlist, setAllowlist] = useState<AllowlistEntry[]>([]);
   const [labelDraft, setLabelDraft] = useState("");
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [status, setStatus] = useState(policyStatus);
 
   const allowlistedIds = new Set(allowlist.map((a) => a.spaceId));
+  const displayError = error ?? spacesError;
 
   const loadAllowlist = useCallback(async () => {
     const res = await fetch("/api/integrations/webex/allowlist?purpose=TECHNOLOGY");
@@ -52,32 +48,11 @@ export function WebexTechnologySpacePicker({
     if (data.status) setStatus(data.status);
   }, []);
 
-  const loadSpaces = useCallback(async (q: string) => {
-    setLoading(true);
-    setError(null);
-    const params = q ? `?q=${encodeURIComponent(q)}` : "";
-    const res = await fetch(`/api/integrations/webex/spaces${params}`);
-    setLoading(false);
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data.error ?? "Failed to load spaces");
-      return;
-    }
-    const data = await res.json();
-    setSpaces(data.spaces ?? []);
-  }, []);
-
   useEffect(() => {
     loadAllowlist();
-    loadSpaces("");
-  }, [loadAllowlist, loadSpaces]);
+  }, [loadAllowlist]);
 
-  useEffect(() => {
-    const t = setTimeout(() => loadSpaces(query), 300);
-    return () => clearTimeout(t);
-  }, [query, loadSpaces]);
-
-  async function toggleSpace(space: WebexSpace) {
+  async function toggleSpace(space: WebexSpaceListItem) {
     setBusyId(space.id);
     const isListed = allowlistedIds.has(space.id);
     const res = await fetch("/api/integrations/webex/allowlist", {
@@ -114,12 +89,14 @@ export function WebexTechnologySpacePicker({
         <h3 style={{ fontSize: "0.875rem", fontWeight: 600 }}>Technology spaces</h3>
         <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
           Policy: {status} · Mapped: {allowlist.length}
+          {totalFetched > 0 ? ` · ${totalFetched} Webex spaces loaded` : ""}
         </span>
       </div>
 
       <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", marginBottom: "0.75rem", lineHeight: 1.5 }}>
         Map additional Webex spaces about products, support, or GTM. Summaries feed the
-        Technologies view — separate from My Priorities.
+        Technology Updates view — separate from My Priorities.
+        {truncated ? " Use search if you do not see a space below." : ""}
       </p>
 
       <label style={{ display: "block", fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.35rem" }}>
@@ -148,9 +125,9 @@ export function WebexTechnologySpacePicker({
         ))}
       </datalist>
 
-      {error && (
+      {displayError && (
         <p style={{ color: "var(--critical)", fontSize: "0.875rem", marginBottom: "0.75rem" }}>
-          {error}
+          {displayError}
         </p>
       )}
 
@@ -285,7 +262,7 @@ export function WebexTechnologySpacePicker({
                     {space.title}
                   </p>
                   <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                    {space.type}
+                    {spaceListSubtitle(space, allSpaces)}
                   </p>
                 </div>
                 <button

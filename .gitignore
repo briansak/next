@@ -40,3 +40,7 @@ next-env.d.ts
 
 # Testing
 coverage/
+
+# Local meeting replays (large media)
+calls/*.mp4
+calls/.frames/

@@ -3,8 +3,6 @@ import { z } from "zod";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { defaultPrepDueDate } from "@/lib/heuristics/event-prep-suggestions";
-import { scopedToTenant } from "@/lib/tenant";
-
 const createSchema = z.object({
   communicationId: z.string().min(1),
   title: z.string().trim().min(3).max(200),
@@ -26,7 +24,6 @@ export async function POST(request: Request) {
   const communication = await prisma.communication.findFirst({
     where: {
       id: communicationId,
-      ...scopedToTenant(session.tenantId),
       source: "OUTLOOK_CALENDAR",
       receivedAt: { gt: new Date() },
     },
@@ -47,7 +44,6 @@ export async function POST(request: Request) {
 
   const duplicate = await prisma.nextStep.findFirst({
     where: {
-      tenantId: session.tenantId,
       communicationId,
       title: { equals: title, mode: "insensitive" },
       status: { in: ["OPEN", "IN_PROGRESS"] },
@@ -61,7 +57,6 @@ export async function POST(request: Request) {
 
   const nextStep = await prisma.nextStep.create({
     data: {
-      tenantId: session.tenantId,
       communicationId,
       title,
       status: "OPEN",

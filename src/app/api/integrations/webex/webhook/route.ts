@@ -56,13 +56,11 @@ export async function POST(request: Request) {
 
   const messageText = text?.trim() || undefined;
 
-  // Find tenant with active WEBEX policy containing this space
   const allowlistEntries = await prisma.webexSpaceAllowlist.findMany({
     where: {
       spaceId: roomId,
       policy: { source: "WEBEX", status: "ACTIVE" },
     },
-    include: { policy: true },
   });
 
   if (allowlistEntries.length === 0) {
@@ -70,15 +68,12 @@ export async function POST(request: Request) {
   }
 
   const entry = allowlistEntries[0];
-  const tenantId = entry.policy.tenantId;
-
-  const allowlist = await getActiveWebexAllowlist(tenantId);
+  const allowlist = await getActiveWebexAllowlist();
   if (!isAllowlistedSpace(allowlist, roomId)) {
     return NextResponse.json({ ok: true, skipped: "policy inactive" });
   }
 
   const result = await ingestWebexMessage(
-    tenantId,
     {
       id: messageId,
       roomId,
@@ -94,6 +89,7 @@ export async function POST(request: Request) {
       purpose: entry.purpose,
       spaceTitle: entry.spaceTitle ?? undefined,
       technologyLabel: entry.technologyLabel ?? undefined,
+      dealLabel: entry.dealLabel ?? undefined,
     }
   );
 

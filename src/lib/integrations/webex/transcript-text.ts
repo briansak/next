@@ -1,27 +1,36 @@
-/** Parse Webex VTT or plain-text transcript downloads. */
-export function parseTranscriptContent(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
+import {
+  parseWebVtt,
+  sampleTranscriptForSummary,
+} from "../calls/vtt";
 
-  if (trimmed.startsWith("WEBVTT")) {
-    return parseVtt(trimmed);
-  }
-
-  return normalizeWhitespace(trimmed);
+export interface ParsedTranscript {
+  /** Full spoken text for storage and display. */
+  text: string;
+  /** Sampled, speaker-aware text optimized for summarization. */
+  summaryInput: string;
 }
 
-function parseVtt(vtt: string): string {
-  const lines = vtt.split(/\r?\n/);
-  const spoken: string[] = [];
+/** Parse Webex VTT or plain-text transcript downloads. */
+export function parseTranscriptContent(raw: string): string {
+  return parseTranscriptParts(raw).text;
+}
 
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t || t === "WEBVTT" || t.startsWith("NOTE") || t.includes("-->")) continue;
-    if (/^\d+$/.test(t)) continue;
-    spoken.push(t);
+/** Parse transcript into display text and summary-optimized input. */
+export function parseTranscriptParts(raw: string): ParsedTranscript {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { text: "", summaryInput: "" };
   }
 
-  return normalizeWhitespace(spoken.join(" "));
+  if (trimmed.startsWith("WEBVTT")) {
+    const cues = parseWebVtt(trimmed);
+    const text = normalizeWhitespace(cues.map((cue) => cue.text).join(" "));
+    const summaryInput = sampleTranscriptForSummary(cues);
+    return { text, summaryInput: summaryInput || text };
+  }
+
+  const text = normalizeWhitespace(trimmed);
+  return { text, summaryInput: truncateForSummary(text) };
 }
 
 function normalizeWhitespace(text: string): string {

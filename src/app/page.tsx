@@ -35,7 +35,7 @@ export default function HomePage() {
           <FeatureItem label="Webex Spaces" detail="Allowlisted spaces only" />
           <FeatureItem label="Email" detail="Shared mailboxes with sender/domain filters" />
           <FeatureItem label="Heuristics" detail="Local priority scoring, optional Ollama" />
-          <FeatureItem label="Multi-tenant" detail="Teams collaborate on next steps per partner" />
+          <FeatureItem label="Local-first" detail="Runs on your laptop with your data" />
         </ul>
       </section>
 

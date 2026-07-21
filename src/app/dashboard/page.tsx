@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { applyViewerMentionBoost } from "@/lib/heuristics";
+import type { MentionUser } from "@/lib/heuristics/mentions";
 import { applyViewerDirectedQuestionBoost } from "@/lib/heuristics/email-questions";
 import {
   computePlanningDashboardScore,
@@ -12,7 +13,6 @@ import {
   resolveDashboardSummaries,
   type DashboardSummaryItem,
 } from "@/lib/heuristics/dashboard-summary";
-import { MEETING_LOOKBACK_DAYS, meetingVisibleToUser } from "@/lib/integrations/webex/meetings";
 import { CardAiSummary } from "@/components/card-ai-summary";
 import {
   DashboardCardLink,
@@ -21,21 +21,60 @@ import {
 import {
   formatFutureDate,
   formatRelativeAge,
-  PriorityBadge,
+  AttentionChip,
+  MetaChip,
 } from "@/components/dashboard-ui";
+import { CollapsiblePanel } from "@/components/collapsible-panel";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageSection, PageShell } from "@/components/ui/page-shell";
+import { Panel } from "@/components/ui/panel";
 import { EventPlanningTodos } from "@/components/event-planning-todos";
 import { NextStepsPanel, type NextStepCardItem } from "@/components/next-steps-panel";
+import { AddManualNextStep } from "@/components/add-manual-next-step";
 import { suggestEventPrepTodos } from "@/lib/heuristics/event-prep-suggestions";
 import {
-  applyUserNextStepOrder,
   formatNextStepCardDisplay,
 } from "@/lib/heuristics/next-step-display";
+import { rankNextStepsForViewer } from "@/lib/heuristics/next-step-ranking";
+import { reclaimOrphanedNextSteps } from "@/lib/next-steps/reclaim";
 import { applyViewerPriorityOverride } from "@/lib/communications/viewer-override";
-import { isPrioritiesCommunication } from "@/lib/communications/space-purpose";
+import { isPrioritiesCommunication, isDealCommunication, isDayJobCommunication } from "@/lib/communications/space-purpose";
 import { isInternalCallCommunication } from "@/lib/communications/internal-call";
 import { isProductAnnouncementCommunication } from "@/lib/communications/product-announcement";
-import { scopedToTenant } from "@/lib/tenant";
+import { PartnerAsksPanel } from "@/components/partner-asks-panel";
+import { collectPartnerAsks } from "@/lib/heuristics/partner-asks";
+import {
+  loadPartnerAskCandidates,
+  PARTNER_ASK_LOOKBACK_DAYS,
+} from "@/lib/partner-asks/load-candidates";
+import { getEmailAllowlistRules } from "@/lib/integrations/email/ingest";
+import { partnerCoverageFromRules } from "@/lib/integrations/email/partner-rules";
 import { travelLogisticsLabel } from "@/lib/heuristics/calendar-event-clustering";
+import {
+  resolveDealSpaceSummary,
+  type DealMessage,
+} from "@/lib/heuristics/deal-summary";
+import { loadUserMeetingsContext } from "@/lib/meetings/user-meetings";
+import { MorningBriefPanel } from "@/components/morning-brief-panel";
+import { CommitmentLedgerPanel } from "@/components/commitment-ledger-panel";
+import {
+  buildMorningBrief,
+  enrichPartnerAsksWithSla,
+  hoursUntil,
+  upcomingMeetingLabel,
+} from "@/lib/heuristics/morning-brief";
+import { evaluateStaleSla } from "@/lib/heuristics/stale-sla";
+import {
+  syncCommitmentsForUser,
+  listOpenCommitments,
+} from "@/lib/commitments/sync";
+import {
+  getUserPreferences,
+  getUserOllamaRuntime,
+  loadDashboardHiddenCommunicationIds,
+  resolveAllowOllamaForUi,
+} from "@/lib/user/preferences";
+import { getAppConfig } from "@/lib/config/app-config-store";
 
 interface CommunicationMetadata {
   mentionedUserIds?: string[];
@@ -67,65 +106,7 @@ interface CalendarMetadata {
   linkedTravelIds?: string[];
 }
 
-interface MeetingActionItem {
-  title: string;
-  assigneeUserIds?: string[];
-  source?: "summary" | "transcript" | "gong";
-}
-
-interface TranscriptActionItemMeta {
-  title: string;
-  excerpt?: string;
-  assigneeUserIds?: string[];
-  assigneeAliases?: string[];
-}
-
-interface MeetingPersonMeta {
-  email?: string;
-  displayName?: string;
-  response?: string;
-}
-
-interface MeetingMetadata {
-  relevantUserEmails?: string[];
-  connectedAccountEmails?: string[];
-  inviteeEmails?: string[];
-  invitees?: MeetingPersonMeta[];
-  participantEmails?: string[];
-  participants?: MeetingPersonMeta[];
-  summaryText?: string;
-  summarySource?: "webex-ai" | "ollama" | "gong" | "none";
-  gongSummaryText?: string;
-  gongActionItems?: string[];
-  summaryActionItems?: string[];
-  actionItems?: MeetingActionItem[];
-  transcriptActionItems?: TranscriptActionItemMeta[];
-  mentionedUserIds?: string[];
-  transcriptText?: string;
-  transcriptSource?: "webex" | "whisper" | "none";
-  recordingDownloadUrl?: string;
-  transcriptDownloadUrl?: string;
-  webLink?: string;
-  hostEmail?: string;
-  hostDisplayName?: string;
-  hasRecording?: boolean;
-  hasSummary?: boolean;
-  hasTranscription?: boolean;
-}
-
-function meetingActionItems(meta: MeetingMetadata): MeetingActionItem[] {
-  if (meta.actionItems?.length) return meta.actionItems;
-  if (meta.summaryActionItems?.length) {
-    return meta.summaryActionItems.map((title) => ({ title }));
-  }
-  return (meta.gongActionItems ?? []).map((title) => ({ title, source: "gong" }));
-}
-
-function transcriptSourceLabel(source?: MeetingMetadata["transcriptSource"]): string | null {
-  if (source === "webex") return "Transcript";
-  if (source === "whisper") return "Transcribed";
-  return null;
-}
+const DEAL_LOOKBACK_DAYS = 14;
 
 export default async function DashboardPage() {
   const session = await getAuthSession();
@@ -133,31 +114,43 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  const tenantWhere = scopedToTenant(session.tenantId);
   const userEmail = session.email.toLowerCase();
+  const viewerMention: MentionUser = {
+    id: session.userId,
+    name: session.name ?? null,
+    email: session.email,
+  };
 
   let savedNextStepOrder: string[] = [];
+  let allowOllamaSummaries = false;
   try {
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        tenantId_userId: {
-          tenantId: session.tenantId,
-          userId: session.userId,
-        },
-      },
-      select: { nextStepOrder: true },
+    const user = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { nextStepOrder: true, allowOllamaSummaries: true },
     });
 
-    savedNextStepOrder = Array.isArray(membership?.nextStepOrder)
-      ? membership.nextStepOrder.filter((id): id is string => typeof id === "string")
+    savedNextStepOrder = Array.isArray(user?.nextStepOrder)
+      ? user.nextStepOrder.filter((id): id is string => typeof id === "string")
       : [];
+    allowOllamaSummaries = user?.allowOllamaSummaries ?? false;
   } catch {
     savedNextStepOrder = [];
+    allowOllamaSummaries = false;
   }
+
+  const memberPreferences = await getUserPreferences(session.userId);
+  const appConfig = await getAppConfig(session.userId);
+  const ollamaRuntime = await getUserOllamaRuntime(session.userId);
+  const allowOllama = resolveAllowOllamaForUi({
+    allowOllamaSummaries,
+    ollamaAvailable: memberPreferences.ollamaAvailable,
+  });
+  const hiddenCommunicationIds = await loadDashboardHiddenCommunicationIds(session.userId
+  );
 
   const rawCommunications = await prisma.communication
     .findMany({
-      where: { ...tenantWhere, source: { in: ["WEBEX", "EMAIL", "OUTLOOK_CALENDAR"] } },
+      where: { source: { in: ["WEBEX", "EMAIL", "OUTLOOK_CALENDAR"] } },
       orderBy: [{ receivedAt: "desc" }],
       take: 50,
       include: {
@@ -185,7 +178,11 @@ export default async function DashboardPage() {
       const boosted = applyViewerMentionBoost(
         c.priorityScore,
         metadata.mentionedUserIds,
-        session.userId
+        session.userId,
+        {
+          text: [c.subject, c.body].filter(Boolean).join("\n"),
+          viewer: viewerMention,
+        }
       );
       const questionBoost = applyViewerDirectedQuestionBoost(
         boosted.score,
@@ -205,7 +202,8 @@ export default async function DashboardPage() {
         scored.score,
         scored.priority,
         c.metadata,
-        session.userId
+        session.userId,
+        { communicationId: c.id, hiddenCommunicationIds }
       );
       return {
         ...c,
@@ -248,7 +246,8 @@ export default async function DashboardPage() {
         planningScore.score,
         c.priority,
         c.metadata,
-        session.userId
+        session.userId,
+        { communicationId: c.id, hiddenCommunicationIds }
       );
       return {
         ...c,
@@ -279,88 +278,28 @@ export default async function DashboardPage() {
     linkedTravelByParent.set(meta.parentEventId, siblings);
   }
 
-  const isAdmin = session.role === "ADMIN";
-  const rawMeetings = await prisma.communication
-    .findMany({
-      where: {
-        ...tenantWhere,
-        source: "WEBEX_MEETING",
-        receivedAt: { gte: daysAgo(MEETING_LOOKBACK_DAYS) },
-      },
-      orderBy: [{ receivedAt: "desc" }],
-      take: 40,
-    })
-    .catch(() => []);
+  const { rawMeetings, meetings } = await loadUserMeetingsContext({
+    userId: session.userId,
+    userEmail,
+    viewer: viewerMention,
+    hiddenCommunicationIds,
+  });
 
-  const meetings = rawMeetings
-    .filter((m) =>
-      meetingVisibleToUser((m.metadata ?? {}) as MeetingMetadata, userEmail, isAdmin)
-    )
-    .filter(
-      (m) =>
-        !isInternalCallCommunication(
-          m.source,
-          m.subject,
-          m.tags,
-          m.metadata
-        )
-    )
-    .map((m) => {
-      const meta = (m.metadata ?? {}) as MeetingMetadata;
-      const boosted = applyViewerMentionBoost(
-        m.priorityScore,
-        meta.mentionedUserIds,
-        session.userId
-      );
-      const yourAction = meetingActionItems(meta).some((item) =>
-        item.assigneeUserIds?.includes(session.userId)
-      );
-      let score = boosted.score;
-      if (yourAction) score = Math.min(10, score + 2);
-
-      const overrideApplied = applyViewerPriorityOverride(
-        score,
-        m.priority,
-        m.metadata,
-        session.userId
-      );
-
-      return {
-        ...m,
-        score: overrideApplied.score,
-        priority: overrideApplied.priority,
-        hidden: overrideApplied.hidden,
-        overridden: overrideApplied.overridden,
-        mentionedYou: boosted.mentionedYou || yourAction,
-      };
-    })
-    .filter((m) => !m.hidden)
-    .sort(
-      (a, b) =>
-        b.score - a.score ||
-        b.priorityScore - a.priorityScore ||
-        b.receivedAt.getTime() - a.receivedAt.getTime()
-    )
-    .slice(0, 8);
+  await reclaimOrphanedNextSteps({
+    userId: session.userId,
+    viewer: viewerMention,
+    now,
+  }).catch(() => {});
 
   const nextSteps = await prisma.nextStep
     .findMany({
       where: {
-        ...tenantWhere,
         status: { in: ["OPEN", "IN_PROGRESS"] },
-        OR: [{ assigneeId: session.userId }, { assigneeId: null }],
-        AND: [
+        OR: [
+          { assigneeId: session.userId },
           {
-            OR: [
-              { communicationId: null },
-              { communication: { receivedAt: { gte: daysAgo(14) } } },
-              {
-                communication: {
-                  source: "OUTLOOK_CALENDAR",
-                  receivedAt: { gt: now },
-                },
-              },
-            ],
+            createdById: session.userId,
+            communicationId: null,
           },
         ],
       },
@@ -368,7 +307,6 @@ export default async function DashboardPage() {
         communication: {
           select: {
             id: true,
-            tenantId: true,
             receivedAt: true,
             source: true,
             subject: true,
@@ -380,24 +318,20 @@ export default async function DashboardPage() {
           },
         },
       },
-      orderBy: [{ priority: "desc" }, { dueAt: "asc" }],
-      take: 10,
+      orderBy: [{ dueAt: "asc" }, { priority: "desc" }, { createdAt: "desc" }],
+      take: 25,
     })
     .catch(() => [])
     .then((steps) =>
-      applyUserNextStepOrder(
-        steps.sort((a, b) => {
-          const aDate = a.communication?.receivedAt?.getTime() ?? 0;
-          const bDate = b.communication?.receivedAt?.getTime() ?? 0;
-          return bDate - aDate;
-        }),
-        savedNextStepOrder
+      rankNextStepsForViewer(steps, session.userId, savedNextStepOrder, now).slice(
+        0,
+        10
       )
     );
 
   const summaryBatchIds = new Set<string>();
   const summaryBatch: DashboardSummaryItem[] = [];
-  for (const item of [...communications, ...planningEvents, ...meetings]) {
+  for (const item of [...communications, ...planningEvents]) {
     if (summaryBatchIds.has(item.id)) continue;
     summaryBatchIds.add(item.id);
     summaryBatch.push(toDashboardSummaryItem(item));
@@ -410,9 +344,177 @@ export default async function DashboardPage() {
   }
 
   const summaryMap = await resolveDashboardSummaries(summaryBatch, {
-    maxGenerations: 0,
-    allowOllama: false,
+    maxGenerations: allowOllama ? 6 : 0,
+    allowOllama,
+    ollamaRuntime,
   });
+
+  const partnerAskCandidates = await loadPartnerAskCandidates({
+    since: daysAgo(PARTNER_ASK_LOOKBACK_DAYS),
+  }).catch(() => []);
+
+  const dayJobCommunicationIds = new Set(
+    rawCommunications
+      .filter((c) => isDayJobCommunication(c.source, c.metadata))
+      .map((c) => c.id)
+  );
+
+  const partnerAllowlistRules = await getEmailAllowlistRules().catch(
+    () => []
+  );
+  const partnerCoverage = partnerCoverageFromRules(partnerAllowlistRules);
+
+  const partnerAsks = collectPartnerAsks(partnerAskCandidates, {
+    userId: session.userId,
+    hiddenCommunicationIds,
+    partnerCoverage,
+  });
+  const partnerAsksWithSla = partnerAsks.map((ask) => ({
+    ...ask,
+    sla: evaluateStaleSla(ask.receivedAt, { now, slaHours: appConfig.partnerAskSlaHours }),
+  }));
+  const stalePartnerAsks = enrichPartnerAsksWithSla(
+    partnerAsks,
+    now,
+    appConfig.partnerAskSlaHours
+  );
+
+  await syncCommitmentsForUser({
+    userId: session.userId,
+    partnerAsks: partnerAsks.filter((ask) =>
+      dayJobCommunicationIds.has(ask.communicationId)
+    ),
+    meetings: meetings.map((m) => ({
+      id: m.id,
+      metadata: m.metadata,
+      receivedAt: m.receivedAt,
+    })),
+    nextSteps: nextSteps
+      .filter(
+        (step) =>
+          !step.communicationId ||
+          (step.communication &&
+            isDayJobCommunication(
+              step.communication.source,
+              step.communication.metadata
+            ))
+      )
+      .map((step) => ({
+        id: step.id,
+        title: step.title,
+        communicationId: step.communicationId,
+        assigneeId: step.assigneeId,
+        dueAt: step.dueAt,
+      })),
+  });
+
+  const openCommitments = await listOpenCommitments(12);
+
+  const upcomingForBrief = [
+    ...planningEvents.map((event) => ({
+      id: event.id,
+      subject: event.subject,
+      receivedAt: event.receivedAt,
+      hoursUntil: hoursUntil(event.receivedAt, now),
+      label: upcomingMeetingLabel(hoursUntil(event.receivedAt, now)),
+    })),
+    ...rawMeetings
+      .filter(
+        (m) =>
+          m.source === "WEBEX_MEETING" &&
+          m.receivedAt > now &&
+          m.receivedAt.getTime() - now.getTime() <= 48 * 60 * 60 * 1000
+      )
+      .map((m) => ({
+        id: m.id,
+        subject: m.subject,
+        receivedAt: m.receivedAt,
+        hoursUntil: hoursUntil(m.receivedAt, now),
+        label: upcomingMeetingLabel(hoursUntil(m.receivedAt, now)),
+      })),
+  ]
+    .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime())
+    .slice(0, 4);
+
+  const morningBrief = buildMorningBrief({
+    userName: session.name,
+    now,
+    partnerAsks,
+    staleAsks: stalePartnerAsks,
+    upcomingMeetings: upcomingForBrief,
+    commitments: openCommitments,
+    planningEventCount: planningEvents.length,
+    mentionedCount: communications.filter((c) => c.mentionedYou).length,
+  });
+
+  const webexPolicy = await prisma.ingestionPolicy
+    .findFirst({
+      where: { source: "WEBEX" },
+      include: {
+        webexAllowlists: {
+          where: { purpose: "DEAL" },
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    })
+    .catch(() => null);
+
+  const dealSpaces = webexPolicy?.webexAllowlists ?? [];
+  const dealMessagesRaw =
+    dealSpaces.length > 0
+      ? await prisma.communication
+          .findMany({
+            where: {
+              source: "WEBEX",
+              receivedAt: { gte: daysAgo(DEAL_LOOKBACK_DAYS) },
+            },
+            orderBy: { receivedAt: "desc" },
+            take: 300,
+          })
+          .catch(() => [])
+      : [];
+
+  const dealMessages = dealMessagesRaw.filter((message) =>
+    isDealCommunication(message.metadata)
+  );
+
+  const dealMessagesBySpace = new Map<string, typeof dealMessages>();
+  for (const message of dealMessages) {
+    const roomId = (message.metadata as { roomId?: string }).roomId;
+    if (!roomId) continue;
+    const bucket = dealMessagesBySpace.get(roomId) ?? [];
+    bucket.push(message);
+    dealMessagesBySpace.set(roomId, bucket);
+  }
+
+  const activeDeals = await Promise.all(
+    dealSpaces.map(async (space) => {
+      const messages = dealMessagesBySpace.get(space.spaceId) ?? [];
+      const summary = await resolveDealSpaceSummary({
+        allowlistId: space.id,
+        spaceTitle: space.spaceTitle ?? "Deal space",
+        dealLabel: space.dealLabel,
+        messages: messages.map(toDealMessage),
+        cache: space.dealSummaryCache,
+        allowOllama,
+        persistCache: async (cache) => {
+          await prisma.webexSpaceAllowlist.update({
+            where: { id: space.id },
+            data: { dealSummaryCache: cache },
+          });
+        },
+      });
+
+      return {
+        spaceId: space.spaceId,
+        spaceTitle: space.spaceTitle ?? space.spaceId,
+        dealLabel: space.dealLabel,
+        summary,
+        messageCount: messages.length,
+        latestAt: messages[0]?.receivedAt ?? null,
+      };
+    })
+  );
 
   const planningEventIds = planningEvents.map((event) => event.id);
   const eventNextSteps =
@@ -421,7 +523,6 @@ export default async function DashboardPage() {
       : await prisma.nextStep
           .findMany({
             where: {
-              ...tenantWhere,
               communicationId: { in: planningEventIds },
               status: { in: ["OPEN", "IN_PROGRESS"] },
             },
@@ -453,6 +554,7 @@ export default async function DashboardPage() {
         title: step.title,
         status: step.status,
         dueAt: step.dueAt,
+        description: step.description,
         communication,
       },
       dashboardSummary
@@ -476,39 +578,64 @@ export default async function DashboardPage() {
   });
 
   return (
-    <main style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem 1.5rem" }}>
-      <header style={{ marginBottom: "2rem" }}>
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 600 }}>My Priorities</h1>
-        <p style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>
-          {session.partnerName ?? session.tenantName} — day-job correspondence and
-          events for {session.name ?? session.email}
-        </p>
-      </header>
+    <PageShell
+      title="My Priorities"
+      description={`${session.partnerName ?? session.partnerName} — day-job correspondence and events for ${session.name ?? session.email}`}
+    >
+      <PageSection>
+        <MorningBriefPanel brief={morningBrief} />
+      </PageSection>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) 300px",
-          gap: "1.5rem",
-          alignItems: "start",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem", minWidth: 0 }}>
+      {activeDeals.length > 0 ? (
+        <PageSection>
+          <CollapsiblePanel title="Active deals" count={activeDeals.length}>
+            <ul className="list-stack">
+              {activeDeals.map((deal) => (
+                <li key={deal.spaceId} className="card-item">
+                  <div className="card__meta">
+                    <div>
+                      <p className="card__title">{deal.dealLabel ?? deal.spaceTitle}</p>
+                      {deal.dealLabel ? (
+                        <p className="text-xs text-muted">{deal.spaceTitle}</p>
+                      ) : null}
+                    </div>
+                    <span className="card__timestamp">
+                      {deal.latestAt
+                        ? formatRelativeAge(deal.latestAt)
+                        : `${deal.messageCount} messages`}
+                    </span>
+                  </div>
+                  <CardAiSummary
+                    text={deal.summary.text}
+                    label={deal.summary.label}
+                    source={deal.summary.source}
+                    variant="teaser"
+                  />
+                  {deal.summary.asks.length > 0 ? (
+                    <p className="text-xs text-muted" style={{ marginTop: "0.35rem", marginBottom: 0 }}>
+                      {deal.summary.asks.length} open ask{deal.summary.asks.length === 1 ? "" : "s"}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </CollapsiblePanel>
+        </PageSection>
+      ) : null}
+
+      {partnerAsks.length > 0 ? (
+        <PageSection>
+          <CollapsiblePanel title="Open partner asks" count={partnerAsks.length}>
+            <PartnerAsksPanel asks={partnerAsksWithSla} />
+          </CollapsiblePanel>
+        </PageSection>
+      ) : null}
+
+      <div className="dashboard-layout">
+        <div className="dashboard-layout__main">
           {planningEvents.length > 0 && (
-            <Panel title="Plan ahead" count={planningEvents.length}>
-              <p
-                style={{
-                  color: "var(--text-muted)",
-                  fontSize: "0.8rem",
-                  marginBottom: "1rem",
-                  lineHeight: 1.5,
-                }}
-              >
-                Upcoming one-off events that may need coordination, prep, or
-                partner outreach — not recurring standups. Add prep to-dos and
-                they&apos;ll appear in Your next steps.
-              </p>
-              <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <Panel title="Plan ahead" count={planningEvents.length} id="plan-ahead">
+              <ul className="list-stack">
                 {planningEvents.map((event) => {
                   const meta = event.calendarMeta;
                   const linkedTravel = linkedTravelByParent.get(event.id) ?? [];
@@ -524,100 +651,50 @@ export default async function DashboardPage() {
                     if (!/book travel/i.test(suggestion)) return true;
                     return meta.missingTravel === true;
                   });
+                  const eventLabel =
+                    event.tags.includes("rock-event")
+                      ? "Rock event"
+                      : event.tags.includes("big-rock")
+                        ? "Big rock"
+                        : null;
                   return (
-                    <li
-                      key={event.id}
-                      style={{
-                        background: "rgba(232, 197, 91, 0.08)",
-                        borderRadius: 8,
-                        border: "1px solid var(--medium)",
-                      }}
-                    >
-                      <DashboardPlanningCardLink id={event.id}>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            marginBottom: "0.25rem",
-                            gap: "0.5rem",
-                          }}
-                        >
-                          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-                            <PriorityBadge priority={event.priority} />
-                            <span
-                              style={{
-                                fontSize: "0.65rem",
-                                fontWeight: 600,
-                                color: "var(--medium)",
-                                textTransform: "uppercase",
-                              }}
-                            >
-                              {formatDaysUntil(
+                    <li key={event.id} className="card">
+                      <DashboardPlanningCardLink id={event.id} priority={event.priority}>
+                        <div className="card__meta">
+                          <div className="card__meta-start">
+                            <MetaChip
+                              label={formatDaysUntil(
                                 meta.daysUntil ??
                                   Math.ceil(
                                     (event.receivedAt.getTime() - now.getTime()) /
                                       (1000 * 60 * 60 * 24)
                                   )
                               )}
-                            </span>
-                            {event.tags.includes("rock-event") && (
-                              <span
-                                style={{
-                                  fontSize: "0.65rem",
-                                  fontWeight: 600,
-                                  color: "var(--high)",
-                                  textTransform: "uppercase",
-                                }}
-                              >
-                                Rock event
-                              </span>
-                            )}
-                            {event.tags.includes("big-rock") && !event.tags.includes("rock-event") && (
-                              <span
-                                style={{
-                                  fontSize: "0.65rem",
-                                  fontWeight: 600,
-                                  color: "var(--high)",
-                                  textTransform: "uppercase",
-                                }}
-                              >
-                                Big rock
-                              </span>
-                            )}
-                            {meta.missingTravel && (
-                              <span
-                                style={{
-                                  fontSize: "0.65rem",
-                                  fontWeight: 600,
-                                  color: "var(--critical)",
-                                  textTransform: "uppercase",
-                                }}
-                              >
-                                Travel not booked
-                              </span>
-                            )}
+                              variant="medium"
+                            />
+                            {eventLabel ? <MetaChip label={eventLabel} variant="high" /> : null}
+                            {meta.missingTravel ? (
+                              <MetaChip label="Travel not booked" variant="critical" />
+                            ) : null}
                           </div>
-                          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                            {formatFutureDate(event.receivedAt)}
-                          </span>
+                          <span className="card__timestamp">{formatFutureDate(event.receivedAt)}</span>
                         </div>
-                        <p style={{ fontSize: "0.875rem", fontWeight: 500 }}>
-                          {event.subject}
-                        </p>
+                        <p className="card__title">{event.subject}</p>
                         <CardAiSummary
                           text={summaryMap.get(event.id)?.text ?? event.summary}
                           label={summaryMap.get(event.id)?.label}
                           source={summaryMap.get(event.id)?.source}
+                          variant="teaser"
                         />
                         {(meta.location || attendeePreview || meta.destinationHint) && (
-                          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
+                          <p className="text-xs text-muted" style={{ marginTop: "0.35rem" }}>
                             {meta.destinationHint
-                              ? `Destination: ${meta.destinationHint}`
+                              ? meta.destinationHint
                               : meta.location
-                                ? `Location: ${meta.location}`
+                                ? meta.location
                                 : null}
                             {(meta.destinationHint || meta.location) && attendeePreview ? " · " : null}
-                            {attendeePreview ? `With: ${attendeePreview}` : null}
+                            {attendeePreview ? attendeePreview : null}
                           </p>
                         )}
                         {linkedTravel.length > 0 && (
@@ -680,58 +757,34 @@ export default async function DashboardPage() {
             {communications.length === 0 ? (
               <EmptyState message="No communications yet. Connect integrations and sync to get started." />
             ) : (
-              <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              <ul className="list-stack">
                 {communications.map((c) => (
                   <li key={c.id}>
                     <DashboardCardLink
                       id={c.id}
                       highlighted={c.mentionedYou || c.directedQuestion}
+                      priority={c.priority}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.25rem", gap: "0.5rem" }}>
-                        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-                          <PriorityBadge priority={c.priority} />
-                          {c.mentionedYou && (
-                            <span
-                              style={{
-                                fontSize: "0.65rem",
-                                fontWeight: 600,
-                                color: "var(--accent)",
-                                textTransform: "uppercase",
-                              }}
-                            >
-                              @you
-                            </span>
-                          )}
-                          {c.directedQuestion && (
-                            <span
-                              style={{
-                                fontSize: "0.65rem",
-                                fontWeight: 600,
-                                color: "var(--high)",
-                                textTransform: "uppercase",
-                              }}
-                            >
-                              Question
-                            </span>
-                          )}
+                      <div className="card__meta">
+                        <div className="card__meta-start">
+                          {(c.mentionedYou || c.directedQuestion) && <AttentionChip />}
                         </div>
-                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                        <span className="card__timestamp">
                           {c.source === "OUTLOOK_CALENDAR" && c.receivedAt > new Date()
                             ? formatFutureDate(c.receivedAt)
-                            : `${formatRelativeAge(c.receivedAt)} · ${c.source}`}
+                            : formatRelativeAge(c.receivedAt)}
                         </span>
                       </div>
-                      <p style={{ fontSize: "0.875rem", fontWeight: 500 }}>
-                        {c.subject ?? c.authorName ?? c.source}
-                      </p>
+                      <p className="card__title">{c.subject ?? c.authorName ?? c.source}</p>
                       <CardAiSummary
                         text={summaryMap.get(c.id)?.text}
                         label={summaryMap.get(c.id)?.label}
                         source={summaryMap.get(c.id)?.source}
+                        variant="teaser"
                       />
                       {!summaryMap.get(c.id)?.text && (
-                        <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
-                          {c.excerpt ?? (c.body ? c.body.slice(0, 120) : "(no content)")}
+                        <p className="line-clamp-2 text-sm text-muted" style={{ marginTop: "0.25rem" }}>
+                          {c.excerpt ?? (c.body ? c.body.slice(0, 140) : "(no content)")}
                         </p>
                       )}
                     </DashboardCardLink>
@@ -742,16 +795,11 @@ export default async function DashboardPage() {
           </Panel>
         </div>
 
-        <aside
-          style={{
-            position: "sticky",
-            top: "1.5rem",
-            alignSelf: "start",
-          }}
-        >
+        <aside className="dashboard-layout__aside">
           <Panel title="Your next steps" count={nextStepCards.length}>
+            <AddManualNextStep />
             {nextStepCards.length === 0 ? (
-              <EmptyState message="No open next steps assigned to you." />
+              <EmptyState message="No open next steps assigned to you. Paste a CFP, deadline, or task above to add one." />
             ) : (
               <NextStepsPanel steps={nextStepCards} />
             )}
@@ -759,145 +807,19 @@ export default async function DashboardPage() {
         </aside>
       </div>
 
-      <section style={{ marginTop: "1.5rem" }}>
-        <Panel title={`Your meetings (last ${MEETING_LOOKBACK_DAYS} days)`} count={meetings.length}>
-          {meetings.length === 0 ? (
-            <EmptyState
-              message={
-                isAdmin
-                  ? `No meetings in the last ${MEETING_LOOKBACK_DAYS} days. Run Sync now after reconnecting Webex as the account whose calendar you want (e.g. brsak@cisco.com).`
-                  : `No meetings in the last ${MEETING_LOOKBACK_DAYS} days for ${session.email}. Meetings come from your Webex calendar, not allowlisted spaces.`
-              }
-            />
-          ) : (
-            <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-              {meetings.map((m) => {
-                const meta = (m.metadata ?? {}) as MeetingMetadata;
-                const cardSummary = summaryMap.get(m.id);
-                const summary =
-                  cardSummary?.text?.trim() ||
-                  meta.gongSummaryText?.trim() ||
-                  null;
-                const summaryLabel = summary
-                  ? cardSummary?.label ?? (meta.gongSummaryText?.trim() ? "Gong AI" : null)
-                  : null;
-                const summarySource =
-                  cardSummary?.source ?? (meta.gongSummaryText?.trim() ? "gong" : null);
-                const transcriptLabel = transcriptSourceLabel(meta.transcriptSource);
-                const attributed =
-                  meta.relevantUserEmails?.[0] ?? meta.connectedAccountEmails?.[0];
-                const mentionedYou = m.mentionedYou;
-                return (
-                  <li key={m.id}>
-                    <DashboardCardLink id={m.id}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.35rem", gap: "0.5rem" }}>
-                        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-                          <PriorityBadge priority={m.priority} />
-                          {mentionedYou && (
-                            <span
-                              style={{
-                                fontSize: "0.65rem",
-                                fontWeight: 600,
-                                color: "var(--accent)",
-                                textTransform: "uppercase",
-                              }}
-                            >
-                              @you
-                            </span>
-                          )}
-                          {summaryLabel && (
-                            <span style={{ fontSize: "0.65rem", fontWeight: 600, color: "var(--low)", textTransform: "uppercase" }}>
-                              {summaryLabel}
-                            </span>
-                          )}
-                          {transcriptLabel && (
-                            <span style={{ fontSize: "0.65rem", fontWeight: 600, color: "var(--medium)", textTransform: "uppercase" }}>
-                              {transcriptLabel}
-                            </span>
-                          )}
-                          {meta.hasRecording && !meta.recordingDownloadUrl && (
-                            <span style={{ fontSize: "0.65rem", fontWeight: 600, color: "var(--medium)", textTransform: "uppercase" }}>
-                              Recording
-                            </span>
-                          )}
-                        </div>
-                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                          {formatRelativeAge(m.receivedAt)}
-                        </span>
-                      </div>
-                      <p style={{ fontWeight: 500, fontSize: "0.875rem", marginBottom: "0.25rem" }}>
-                        {m.subject ?? "Meeting"}
-                      </p>
-                      {(m.authorName || meta.hostEmail) && (
-                        <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>
-                          Host: {m.authorName ?? meta.hostEmail}
-                          {isAdmin && attributed && attributed !== userEmail
-                            ? ` · Synced for ${attributed}`
-                            : ""}
-                        </p>
-                      )}
-                      <CardAiSummary
-                        text={
-                          summary ??
-                          (meta.hasRecording
-                            ? "Recording available — open for transcript and summary."
-                            : meta.hasSummary
-                              ? "Webex AI summary available — open to view details."
-                              : m.excerpt ?? "No summary available for this meeting.")
-                        }
-                        label={summary ? summaryLabel : null}
-                        source={summarySource}
-                      />
-                    </DashboardCardLink>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Panel>
-      </section>
-    </main>
-  );
-}
-
-function Panel({
-  title,
-  count,
-  children,
-}: {
-  title: string;
-  count: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: 12,
-        padding: "1.25rem",
-      }}
-    >
-      <h2 style={{ fontSize: "0.875rem", fontWeight: 600, marginBottom: "1rem" }}>
-        {title}
-        <span style={{ color: "var(--text-muted)", fontWeight: 400, marginLeft: "0.5rem" }}>
-          ({count})
-        </span>
-      </h2>
-      {children}
-    </section>
-  );
-}
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", lineHeight: 1.6 }}>{message}</p>
+      {openCommitments.length > 0 ? (
+        <PageSection>
+          <CollapsiblePanel title="Commitment ledger" count={openCommitments.length}>
+            <CommitmentLedgerPanel commitments={openCommitments} />
+          </CollapsiblePanel>
+        </PageSection>
+      ) : null}
+    </PageShell>
   );
 }
 
 function toDashboardSummaryItem(item: {
   id: string;
-  tenantId: string;
   source: DashboardSummaryItem["source"];
   subject: string | null;
   body: string;
@@ -908,7 +830,6 @@ function toDashboardSummaryItem(item: {
 }): DashboardSummaryItem {
   return {
     id: item.id,
-    tenantId: item.tenantId,
     source: item.source,
     subject: item.subject,
     body: item.body,
@@ -916,6 +837,23 @@ function toDashboardSummaryItem(item: {
     summary: item.summary,
     authorName: item.authorName,
     metadata: item.metadata,
+  };
+}
+
+function toDealMessage(message: {
+  id: string;
+  body: string;
+  authorName: string | null;
+  receivedAt: Date;
+  metadata: unknown;
+}): DealMessage {
+  const meta = (message.metadata ?? {}) as { mentionedUserIds?: string[] };
+  return {
+    id: message.id,
+    body: message.body,
+    authorName: message.authorName,
+    receivedAt: message.receivedAt,
+    mentionedUserIds: meta.mentionedUserIds,
   };
 }
 

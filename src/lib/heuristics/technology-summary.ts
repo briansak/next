@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { generateOllamaJson } from "./ollama";
 
 export interface TechnologyMessage {
   id: string;
@@ -26,6 +27,37 @@ interface TechnologySummaryCache {
   source: "ollama" | "heuristic";
   at: string;
   messageCount: number;
+}
+
+export function pickTechnologySpaceForOllamaSummary(
+  spaces: Array<{ id: string; spaceId: string }>,
+  messageCountBySpaceId: Map<string, number>
+): string | null {
+  const configured = process.env.OLLAMA_TECHNOLOGY_SPACE_ID?.trim();
+  if (configured) {
+    const match = spaces.find(
+      (space) => space.spaceId === configured || space.id === configured
+    );
+    if (match && (messageCountBySpaceId.get(match.spaceId) ?? 0) > 0) {
+      return match.spaceId;
+    }
+  }
+
+  let bestSpaceId: string | null = null;
+  let bestCount = 0;
+  for (const space of spaces) {
+    const count = messageCountBySpaceId.get(space.spaceId) ?? 0;
+    if (count > bestCount) {
+      bestCount = count;
+      bestSpaceId = space.spaceId;
+    }
+  }
+
+  return bestSpaceId;
+}
+
+export function technologySummariesEnabled(): boolean {
+  return Boolean(process.env.OLLAMA_BASE_URL?.trim());
 }
 
 const QUESTION_RE = /[^.!?\n]*\?/g;
@@ -155,9 +187,7 @@ export async function summarizeTechnologySpaceWithOllama(
   technologyLabel: string | null,
   messages: TechnologyMessage[]
 ): Promise<TechnologySpaceSummary | null> {
-  const baseUrl = process.env.OLLAMA_BASE_URL?.trim();
-  const model = process.env.OLLAMA_MODEL ?? "llama3.1:8b";
-  if (!baseUrl || messages.length === 0) return null;
+  if (!technologySummariesEnabled() || messages.length === 0) return null;
 
   const recent = [...messages]
     .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())
@@ -189,42 +219,27 @@ Space: ${spaceTitle}
 Recent messages:
 ${transcript.slice(0, 10_000)}`;
 
-  try {
-    const response = await fetch(`${baseUrl}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        prompt,
-        stream: false,
-        format: "json",
-      }),
-    });
+  const parsed = await generateOllamaJson<{
+    summary?: string;
+    asks?: string[];
+    responses?: string[];
+    themes?: string[];
+  }>(prompt, {
+    timeoutMs: 90_000,
+    model: process.env.OLLAMA_TECHNOLOGY_MODEL?.trim() || undefined,
+  });
 
-    if (!response.ok) return null;
+  if (!parsed?.summary?.trim()) return null;
 
-    const data = (await response.json()) as { response: string };
-    const parsed = JSON.parse(data.response) as {
-      summary?: string;
-      asks?: string[];
-      responses?: string[];
-      themes?: string[];
-    };
-
-    if (!parsed.summary?.trim()) return null;
-
-    return {
-      text: parsed.summary.trim(),
-      asks: (parsed.asks ?? []).filter(Boolean).slice(0, 5),
-      responses: (parsed.responses ?? []).filter(Boolean).slice(0, 5),
-      themes: (parsed.themes ?? []).filter(Boolean).slice(0, 6),
-      source: "ollama",
-      label: technologyLabel ?? "AI summary",
-      messageCount: recent.length,
-    };
-  } catch {
-    return null;
-  }
+  return {
+    text: parsed.summary.trim(),
+    asks: (parsed.asks ?? []).filter(Boolean).slice(0, 5),
+    responses: (parsed.responses ?? []).filter(Boolean).slice(0, 5),
+    themes: (parsed.themes ?? []).filter(Boolean).slice(0, 6),
+    source: "ollama",
+    label: technologyLabel ?? "AI summary",
+    messageCount: recent.length,
+  };
 }
 
 function readSummaryCache(
@@ -274,7 +289,9 @@ export async function resolveTechnologySpaceSummary(input: {
   persistCache?: (cache: Prisma.InputJsonValue) => Promise<void>;
 }): Promise<TechnologySpaceSummary> {
   const cached = readSummaryCache(input.cache, input.messages.length);
-  if (cached) return cached;
+  if (cached && (cached.source === "ollama" || input.allowOllama !== true)) {
+    return cached;
+  }
 
   const ollama =
     input.allowOllama === false

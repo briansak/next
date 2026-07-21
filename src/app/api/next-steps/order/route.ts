@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { scopedToTenant } from "@/lib/tenant";
 
 const orderSchema = z.object({
   orderedIds: z.array(z.string().min(1)).max(50),
@@ -24,7 +23,6 @@ export async function PATCH(request: Request) {
 
   const visibleSteps = await prisma.nextStep.findMany({
     where: {
-      ...scopedToTenant(session.tenantId),
       id: { in: uniqueIds },
       status: { in: ["OPEN", "IN_PROGRESS"] },
       OR: [{ assigneeId: session.userId }, { assigneeId: null }],
@@ -40,13 +38,8 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    await prisma.tenantMember.update({
-      where: {
-        tenantId_userId: {
-          tenantId: session.tenantId,
-          userId: session.userId,
-        },
-      },
+    await prisma.user.update({
+      where: { id: session.userId },
       data: {
         nextStepOrder: sanitizedOrder,
       },

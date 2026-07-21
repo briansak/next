@@ -1,13 +1,19 @@
 import type { CommunicationSource } from "@prisma/client";
+import type { CallHighlight } from "@/lib/heuristics/ollama-vision";
 import {
   classifyInternalCall,
   type InternalCallType,
 } from "../integrations/gong/internal-calls";
+import {
+  detectReplayPlatform,
+  extractReplayUrl,
+} from "../integrations/internal-calls/replay-email";
 
 export interface InternalCallMetadata {
   internalCallType?: InternalCallType;
   internalCallLabel?: string;
   gongSummaryText?: string;
+  gongTranscriptText?: string;
   gongActionItems?: string[];
   gongReplayUrl?: string;
   gongMeetingTitle?: string;
@@ -16,7 +22,13 @@ export interface InternalCallMetadata {
   fromReplayEmail?: boolean;
   replayUrl?: string;
   replayPlatform?: string;
-  replaySummarySource?: "email" | "ollama" | "transcript";
+  replaySummarySource?: "email" | "ollama" | "transcript" | "vidcast";
+  transcriptText?: string;
+  callHighlights?: CallHighlight[];
+  vidcastShareId?: string;
+  vidcastVideoId?: string;
+  vidcastShareUrl?: string;
+  replayBridgeUrl?: string;
   participantEmails?: string[];
   relevantUserEmails?: string[];
   recordingDownloadUrl?: string;
@@ -65,6 +77,7 @@ export function viewerAttendedInternalCall(
 export function internalCallReplayUrl(metadata: unknown): string | null {
   const meta = (metadata ?? {}) as InternalCallMetadata;
   return (
+    meta.vidcastShareUrl ??
     meta.replayUrl ??
     meta.gongReplayUrl ??
     meta.recordingDownloadUrl ??
@@ -78,13 +91,32 @@ export function internalCallReplayPlatform(metadata: unknown): string | null {
   if (meta.replayPlatform) return meta.replayPlatform;
   const url = internalCallReplayUrl(metadata);
   if (!url) return null;
-  if (/gong\.io/i.test(url)) return "gong";
-  if (/webex\.com/i.test(url)) return "webex";
-  if (/zoom\.us/i.test(url)) return "zoom";
-  if (/stream\.microsoft/i.test(url)) return "stream";
-  if (/sharepoint\.com/i.test(url)) return "sharepoint";
-  if (/campaignmgr\.cisco\.com/i.test(url)) return "cisco";
-  if (/vidcast\.io/i.test(url)) return "vidcast";
-  if (/youtube\.com|youtu\.be/i.test(url)) return "youtube";
-  return null;
+  return detectReplayPlatform(url);
+}
+
+export function resolveInternalCallReplay(
+  metadata: unknown,
+  ...textSources: Array<string | null | undefined>
+): { url: string | null; platform: string | null } {
+  const urlFromMeta = internalCallReplayUrl(metadata);
+  if (urlFromMeta) {
+    return {
+      url: urlFromMeta,
+      platform: internalCallReplayPlatform(metadata),
+    };
+  }
+
+  for (const source of textSources) {
+    const text = source?.trim();
+    if (!text) continue;
+    const extracted = extractReplayUrl(text);
+    if (extracted) {
+      return {
+        url: extracted,
+        platform: detectReplayPlatform(extracted),
+      };
+    }
+  }
+
+  return { url: null, platform: null };
 }

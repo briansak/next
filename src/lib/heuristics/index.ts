@@ -10,6 +10,7 @@ import {
   detectMentions,
   type MentionUser,
   MENTION_PRIORITY_BOOST,
+  viewerMentionedInText,
 } from "./mentions";
 import { analyzeEmailAudience } from "./email-questions";
 
@@ -18,6 +19,7 @@ export {
   buildMentionAliases,
   detectMentions,
   viewerIsMentioned,
+  viewerMentionedInText,
   MENTION_PRIORITY_BOOST,
 } from "./mentions";
 
@@ -63,10 +65,13 @@ export interface HeuristicResult {
 const ASK_PATTERNS = [
   /\bcan you\b/i,
   /\bcould you\b/i,
-  /\bplease (review|send|confirm|provide|update|let us know)\b/i,
+  /\bplease (review|send|confirm|provide|update|let us know|share)\b/i,
   /\bneed (you|your|this|a)\b/i,
   /\bwaiting (on|for)\b/i,
   /\baction required\b/i,
+  /\b(?:wondering|curious) if you\b/i,
+  /\bif you (?:have|had) anything\b/i,
+  /\banything you could share\b/i,
 ];
 
 const DEADLINE_PATTERNS = [
@@ -213,9 +218,14 @@ export function analyzeCommunication(input: HeuristicInput): HeuristicResult {
 export function applyViewerMentionBoost(
   baseScore: number,
   mentionedUserIds: string[] | undefined,
-  viewerId: string
+  viewerId: string,
+  options?: { text?: string | null; viewer?: MentionUser }
 ): { score: number; priority: Priority; mentionedYou: boolean } {
-  const mentionedYou = mentionedUserIds?.includes(viewerId) ?? false;
+  const mentionedYou =
+    (mentionedUserIds?.includes(viewerId) ?? false) ||
+    (options?.text && options.viewer?.id === viewerId
+      ? viewerMentionedInText(options.text, options.viewer)
+      : false);
   const score = Math.min(10, baseScore + (mentionedYou ? MENTION_PRIORITY_BOOST : 0));
   return { score, priority: scoreToPriority(score), mentionedYou };
 }

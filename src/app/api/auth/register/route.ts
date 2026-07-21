@@ -38,27 +38,16 @@ export async function POST(request: Request) {
     );
   }
 
-  let wwtTenant;
-  try {
-    wwtTenant = await prisma.tenant.findUnique({ where: { slug: "wwt" } });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    if (message.includes("Can't reach database server")) {
-      return NextResponse.json(
-        { error: "Database is not running. Start PostgreSQL and run npm run db:push." },
-        { status: 503 }
-      );
-    }
-    throw err;
-  }
-  if (!wwtTenant) {
+  const userCount = await prisma.user.count();
+  if (userCount > 0) {
     return NextResponse.json(
-      { error: "Tenant not configured. Run npm run db:seed first." },
-      { status: 503 }
+      { error: "This install already has an account. Sign in instead." },
+      { status: 403 }
     );
   }
 
   const passwordHash = await hashPassword(password);
+  const partnerName = process.env.SEED_PARTNER_NAME?.trim() || null;
 
   let user;
   try {
@@ -67,12 +56,7 @@ export async function POST(request: Request) {
         email: normalizedEmail,
         name: name ?? null,
         passwordHash,
-        memberships: {
-          create: {
-            tenantId: wwtTenant.id,
-            role: "MEMBER",
-          },
-        },
+        partnerName,
       },
     });
   } catch (err) {

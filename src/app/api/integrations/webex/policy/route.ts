@@ -2,8 +2,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { requireAdmin, scopedToTenant } from "@/lib/tenant";
-
 const bodySchema = z.object({
   status: z.enum(["DRAFT", "ACTIVE", "PAUSED"]),
 });
@@ -15,12 +13,7 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    requireAdmin({
-      tenantId: session.tenantId,
-      userId: session.userId,
-      role: session.role,
-    });
-  } catch {
+      } catch {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -31,7 +24,6 @@ export async function PATCH(request: Request) {
 
   const policy = await prisma.ingestionPolicy.findFirst({
     where: {
-      ...scopedToTenant(session.tenantId),
       source: "WEBEX",
     },
     include: { webexAllowlists: true },

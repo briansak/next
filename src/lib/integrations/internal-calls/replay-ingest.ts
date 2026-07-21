@@ -1,3 +1,4 @@
+import { mergeCommunicationMetadata } from "@/lib/communications/viewer-override";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@prisma/client";
 import type { EmailMessage } from "@/lib/integrations/email/allowlist";
@@ -5,9 +6,13 @@ import {
   classifyInternalCall,
   INTERNAL_CALL_LOOKBACK_DAYS,
 } from "@/lib/integrations/gong/internal-calls";
-import { enrichReplaySummary } from "./replay-enrich";
+import { enrichReplaySummary, isShallowReplaySummary } from "./replay-enrich";
 import { parseReplayEmail, type ReplayEmailContent } from "./replay-email";
 import { looksLikeEncodedEmailBody } from "../../integrations/email/body-text";
+import {
+  attachReplaySourceToMeeting,
+  findMatchingWebexMeeting,
+} from "@/lib/integrations/meetings/unify";
 
 export interface ReplayIngestResult {
   handled: boolean;
@@ -17,17 +22,59 @@ export interface ReplayIngestResult {
 }
 
 export async function tryIngestReplayEmail(
-  tenantId: string,
-  parsed: EmailMessage
+    parsed: EmailMessage
 ): Promise<ReplayIngestResult> {
   const replay = parseReplayEmail(parsed);
   if (!replay) {
     return { handled: false, created: false };
   }
 
+  const classification = classifyInternalCall(
+    replay.meetingTitle,
+    replay.subject,
+    replay.bodyText
+  );
+
+  if (classification) {
+    const enriched = await enrichReplaySummary(replay, {});
+    const match = await findMatchingWebexMeeting( {
+      meetingTitle: replay.meetingTitle,
+      receivedAt: replay.receivedAt,
+    });
+
+    if (match) {
+      const attached = await attachReplaySourceToMeeting( match.id, {
+        messageId: replay.messageId,
+        meetingTitle: replay.meetingTitle,
+        summary: enriched.summary,
+        actionItems: enriched.actionItems,
+        replayUrl: enriched.vidcastShareUrl ?? replay.replayUrl ?? undefined,
+        replayPlatform: enriched.vidcastShareUrl ? "vidcast" : replay.replayPlatform ?? undefined,
+        summarySource: enriched.source,
+        callHighlights: enriched.callHighlights,
+        vidcastShareId: enriched.vidcastShareId,
+        vidcastVideoId: enriched.vidcastVideoId,
+        vidcastShareUrl: enriched.vidcastShareUrl,
+        replayBridgeUrl: enriched.replayBridgeUrl,
+        transcriptText: enriched.transcriptText,
+        receivedAt: replay.receivedAt,
+        internalCallType: classification.type,
+        internalCallLabel: classification.label,
+      });
+
+      if (attached) {
+        return {
+          handled: true,
+          created: false,
+          upgraded: true,
+          id: match.id,
+        };
+      }
+    }
+  }
+
   const existing = await prisma.communication.findFirst({
     where: {
-      tenantId,
       externalId: replay.messageId,
       source: "EMAIL",
     },
@@ -39,7 +86,6 @@ export async function tryIngestReplayEmail(
   }
 
   const id = await upsertInternalCallReplay(
-    tenantId,
     replay,
     existing?.id
   );
@@ -53,8 +99,7 @@ export async function tryIngestReplayEmail(
 }
 
 async function upsertInternalCallReplay(
-  tenantId: string,
-  replay: ReplayEmailContent,
+    replay: ReplayEmailContent,
   existingId?: string
 ): Promise<string> {
   const classification = classifyInternalCall(
@@ -66,7 +111,36 @@ async function upsertInternalCallReplay(
     throw new Error(`Replay email failed internal call classification: ${replay.subject}`);
   }
 
-  const enriched = await enrichReplaySummary(replay);
+  const enriched = await enrichReplaySummary(replay, {});
+
+  let existingMetadata: unknown;
+  if (existingId) {
+    const existing = await prisma.communication.findUnique({
+      where: { id: existingId },
+      select: { metadata: true },
+    });
+    existingMetadata = existing?.metadata;
+  }
+
+  const metadata = mergeCommunicationMetadata(existingMetadata, {
+    internalCallType: classification.type,
+    internalCallLabel: classification.label,
+    fromReplayEmail: true,
+    replayUrl: enriched.vidcastShareUrl ?? replay.replayUrl,
+    replayPlatform: enriched.vidcastShareUrl ? "vidcast" : replay.replayPlatform,
+    gongSummaryText: enriched.summary,
+    gongReplayUrl: enriched.vidcastShareUrl ?? replay.replayUrl,
+    gongMeetingTitle: replay.meetingTitle,
+    gongActionItems: enriched.actionItems,
+    replaySummarySource: enriched.source,
+    callHighlights: enriched.callHighlights,
+    vidcastShareId: enriched.vidcastShareId,
+    vidcastVideoId: enriched.vidcastVideoId,
+    vidcastShareUrl: enriched.vidcastShareUrl,
+    replayBridgeUrl: enriched.replayBridgeUrl,
+    transcriptText: enriched.transcriptText,
+    messageId: replay.messageId,
+  });
 
   const data = {
     subject: replay.meetingTitle,
@@ -84,19 +158,7 @@ async function upsertInternalCallReplay(
       classification.type,
       ...(enriched.source !== "email" ? ["ai-summary"] : []),
     ],
-    metadata: {
-      internalCallType: classification.type,
-      internalCallLabel: classification.label,
-      fromReplayEmail: true,
-      replayUrl: replay.replayUrl,
-      replayPlatform: replay.replayPlatform,
-      gongSummaryText: enriched.summary,
-      gongReplayUrl: replay.replayUrl,
-      gongMeetingTitle: replay.meetingTitle,
-      gongActionItems: enriched.actionItems,
-      replaySummarySource: enriched.source,
-      messageId: replay.messageId,
-    } as Prisma.InputJsonValue,
+    metadata: metadata as Prisma.InputJsonValue,
   };
 
   if (existingId) {
@@ -110,7 +172,6 @@ async function upsertInternalCallReplay(
 
   const communication = await prisma.communication.create({
     data: {
-      tenantId,
       source: "EMAIL",
       externalId: replay.messageId,
       ...data,
@@ -130,14 +191,12 @@ export interface BackfillInternalCallsResult {
 }
 
 export async function backfillInternalCallReplays(
-  tenantId: string
-): Promise<BackfillInternalCallsResult> {
+  ): Promise<BackfillInternalCallsResult> {
   const since = new Date();
   since.setDate(since.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
 
   const emails = await prisma.communication.findMany({
     where: {
-      tenantId,
       source: "EMAIL",
       receivedAt: { gte: since },
       NOT: { tags: { has: "internal-call" } },
@@ -186,7 +245,7 @@ export async function backfillInternalCallReplays(
     }
 
     try {
-      const id = await upsertInternalCallReplay(tenantId, replay, email.id);
+      const id = await upsertInternalCallReplay( replay, email.id);
       if (id === email.id) upgraded++;
       else ingested++;
     } catch {
@@ -194,28 +253,31 @@ export async function backfillInternalCallReplays(
     }
   }
 
-  const encodedRefresh = await refreshEncodedInternalCalls(tenantId);
-  const summaryRefresh = await refreshLongInternalCallSummaries(tenantId);
-  const replayUrlRefresh = await refreshMissingReplayUrls(tenantId);
+  const encodedRefresh = await refreshEncodedInternalCalls();
+  const summaryRefresh = await refreshLongInternalCallSummaries();
+  const replayUrlRefresh = await refreshMissingReplayUrls();
+  const vidcastRefresh = await refreshVidcastReplaySummaries();
 
   return {
     scanned: emails.length,
     ingested,
     upgraded,
     skipped,
-    refreshed: encodedRefresh.refreshed + summaryRefresh.refreshed + replayUrlRefresh.refreshed,
+    refreshed:
+      encodedRefresh.refreshed +
+      summaryRefresh.refreshed +
+      replayUrlRefresh.refreshed +
+      vidcastRefresh.refreshed,
   };
 }
 
 async function refreshEncodedInternalCalls(
-  tenantId: string
-): Promise<{ refreshed: number }> {
+  ): Promise<{ refreshed: number }> {
   const since = new Date();
   since.setDate(since.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
 
   const internalCalls = await prisma.communication.findMany({
     where: {
-      tenantId,
       source: "EMAIL",
       tags: { has: "internal-call" },
       receivedAt: { gte: since },
@@ -256,7 +318,7 @@ async function refreshEncodedInternalCalls(
     if (!replay) continue;
 
     try {
-      await upsertInternalCallReplay(tenantId, replay, email.id);
+      await upsertInternalCallReplay( replay, email.id);
       refreshed++;
     } catch {
       /* skip */
@@ -267,14 +329,12 @@ async function refreshEncodedInternalCalls(
 }
 
 async function refreshLongInternalCallSummaries(
-  tenantId: string
-): Promise<{ refreshed: number }> {
+  ): Promise<{ refreshed: number }> {
   const since = new Date();
   since.setDate(since.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
 
   const internalCalls = await prisma.communication.findMany({
     where: {
-      tenantId,
       source: "EMAIL",
       tags: { has: "internal-call" },
       receivedAt: { gte: since },
@@ -315,7 +375,7 @@ async function refreshLongInternalCallSummaries(
     if (!replay) continue;
 
     try {
-      await upsertInternalCallReplay(tenantId, replay, email.id);
+      await upsertInternalCallReplay( replay, email.id);
       refreshed++;
     } catch {
       /* skip */
@@ -326,14 +386,12 @@ async function refreshLongInternalCallSummaries(
 }
 
 async function refreshMissingReplayUrls(
-  tenantId: string
-): Promise<{ refreshed: number }> {
+  ): Promise<{ refreshed: number }> {
   const since = new Date();
   since.setDate(since.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
 
   const internalCalls = await prisma.communication.findMany({
     where: {
-      tenantId,
       source: "EMAIL",
       tags: { has: "internal-call" },
       receivedAt: { gte: since },
@@ -370,7 +428,86 @@ async function refreshMissingReplayUrls(
     if (!replay?.replayUrl) continue;
 
     try {
-      await upsertInternalCallReplay(tenantId, replay, email.id);
+      await upsertInternalCallReplay( replay, email.id);
+      refreshed++;
+    } catch {
+      /* skip */
+    }
+  }
+
+  return { refreshed };
+}
+
+async function refreshVidcastReplaySummaries(
+  ): Promise<{ refreshed: number }> {
+  const since = new Date();
+  since.setDate(since.getDate() - INTERNAL_CALL_LOOKBACK_DAYS);
+
+  const internalCalls = await prisma.communication.findMany({
+    where: {
+      source: "EMAIL",
+      tags: { has: "internal-call" },
+      receivedAt: { gte: since },
+    },
+    select: {
+      id: true,
+      externalId: true,
+      subject: true,
+      body: true,
+      summary: true,
+      authorEmail: true,
+      receivedAt: true,
+      metadata: true,
+    },
+    take: 100,
+    orderBy: { receivedAt: "desc" },
+  });
+
+  let refreshed = 0;
+
+  for (const email of internalCalls) {
+    const meta = (email.metadata ?? {}) as {
+      replayUrl?: string | null;
+      vidcastShareUrl?: string | null;
+      replaySummarySource?: string;
+      callHighlights?: unknown[];
+      transcriptText?: string;
+      gongSummaryText?: string;
+    };
+
+    const currentSummary = meta.gongSummaryText ?? email.summary ?? "";
+    const hasVidcastSignals =
+      Boolean(meta.replayUrl) ||
+      Boolean(meta.vidcastShareUrl) ||
+      Boolean(meta.transcriptText) ||
+      meta.replaySummarySource === "vidcast" ||
+      meta.replaySummarySource === "transcript";
+
+    if (!hasVidcastSignals) continue;
+
+    if (
+      meta.replaySummarySource === "transcript" &&
+      meta.transcriptText &&
+      !isShallowReplaySummary(currentSummary)
+    ) {
+      continue;
+    }
+    if (!meta.replayUrl && !meta.vidcastShareUrl) continue;
+
+    const replay = parseReplayEmail({
+      messageId: email.externalId,
+      subject: email.subject ?? "",
+      body: email.body,
+      fromAddress: email.authorEmail ?? "",
+      receivedAt: email.receivedAt,
+      toAddresses: [],
+      ccAddresses: [],
+    });
+
+    if (!replay?.replayUrl) continue;
+
+    try {
+      await upsertInternalCallReplay( replay, email.id);
       refreshed++;
     } catch {
       /* skip */

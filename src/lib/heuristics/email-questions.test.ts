@@ -28,9 +28,31 @@ describe("detectQuestions", () => {
     expect(result.snippets.join(" ")).toContain("updated deck");
   });
 
+  it("detects soft partner requests without a question mark", () => {
+    const result = detectQuestions(
+      "I was wondering if you had anything you could share yet on that viewpoint."
+    );
+    expect(result.hasQuestion).toBe(true);
+    expect(result.snippets.join(" ")).toMatch(/wondering if you/i);
+  });
+
   it("ignores URLs that contain question marks", () => {
     const result = detectQuestions(
       "See https://example.com/path?foo=bar for details."
+    );
+    expect(result.hasQuestion).toBe(false);
+  });
+
+  it("ignores email signature help lines", () => {
+    const result = detectQuestions(
+      "Calendar update.\n\nNeed help?\nDrew Kaiser\nWWT"
+    );
+    expect(result.hasQuestion).toBe(false);
+  });
+
+  it("ignores event registration subjects with trailing Questions?", () => {
+    const result = detectQuestions(
+      "You're registered for a WWT event: Cisco CTF - Neuro Nemesis - July 29 Questions?"
     );
     expect(result.hasQuestion).toBe(false);
   });

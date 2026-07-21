@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import type { Priority, Prisma } from "@prisma/client";
+import { Prisma, type Priority } from "@prisma/client";
 import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import {
+  addDashboardHiddenCommunicationId,
   buildViewerOverride,
   mergeViewerOverrideMetadata,
+  parseDashboardHiddenCommunicationIds,
+  removeDashboardHiddenCommunicationId,
 } from "@/lib/communications/viewer-override";
 import { meetingVisibleToUser } from "@/lib/integrations/webex/meetings";
-import { scopedToTenant } from "@/lib/tenant";
 
 const bodySchema = z
   .object({
@@ -37,10 +39,7 @@ export async function PATCH(
   }
 
   const communication = await prisma.communication.findFirst({
-    where: {
-      id,
-      ...scopedToTenant(session.tenantId),
-    },
+    where: { id },
   });
 
   if (!communication) {
@@ -57,7 +56,7 @@ export async function PATCH(
         hostEmail?: string;
       },
       session.email.toLowerCase(),
-      session.role === "ADMIN"
+      true
     );
     if (!visible) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -89,12 +88,47 @@ export async function PATCH(
     override
   );
 
-  await prisma.communication.update({
-    where: { id },
-    data: {
-      metadata: metadata as Prisma.InputJsonValue,
-    },
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { dashboardHiddenCommunicationIds: true },
   });
+
+  let hiddenCommunicationIds = parseDashboardHiddenCommunicationIds(
+    user?.dashboardHiddenCommunicationIds
+  );
+
+  if (parsed.data.reset) {
+    hiddenCommunicationIds = removeDashboardHiddenCommunicationId(
+      hiddenCommunicationIds,
+      id
+    );
+  } else if (override?.hidden) {
+    hiddenCommunicationIds = addDashboardHiddenCommunicationId(
+      hiddenCommunicationIds,
+      id
+    );
+  } else {
+    hiddenCommunicationIds = removeDashboardHiddenCommunicationId(
+      hiddenCommunicationIds,
+      id
+    );
+  }
+
+  await prisma.$transaction([
+    prisma.communication.update({
+      where: { id },
+      data: {
+        metadata: metadata as Prisma.InputJsonValue,
+      },
+    }),
+    prisma.user.update({
+      where: { id: session.userId },
+      data: {
+        dashboardHiddenCommunicationIds:
+          hiddenCommunicationIds.length > 0 ? hiddenCommunicationIds : Prisma.DbNull,
+      },
+    }),
+  ]);
 
   return NextResponse.json({
     ok: true,

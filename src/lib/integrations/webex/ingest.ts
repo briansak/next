@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@prisma/client";
+import { mergeCommunicationMetadata } from "@/lib/communications/viewer-override";
 import { analyzeCommunication } from "@/lib/heuristics";
-import { getTenantMembers } from "@/lib/tenant/members";
+import { getAppUserForMentions } from "@/lib/user/profile";
 import type { MentionUser } from "@/lib/heuristics/mentions";
 import type { SpacePurpose } from "@/lib/communications/space-purpose";
 import {
@@ -12,14 +14,12 @@ import {
   type WebexSpaceAllowlistEntry,
 } from "./index";
 
-export async function getWebexAccessToken(tenantId: string): Promise<string | null> {
+export async function getWebexAccessToken(): Promise<string | null> {
   const config = getWebexConfig();
   if (!config) return null;
 
   const token = await prisma.integrationToken.findUnique({
-    where: {
-      tenantId_provider: { tenantId, provider: "WEBEX" },
-    },
+    where: { provider: "WEBEX" },
   });
 
   if (!token) return null;
@@ -47,19 +47,13 @@ export async function getWebexAccessToken(tenantId: string): Promise<string | nu
   return refreshed.accessToken;
 }
 
-export async function getActiveWebexAllowlist(
-  tenantId: string
-): Promise<WebexSpaceAllowlistEntry[]> {
-  const policy = await prisma.ingestionPolicy.findFirst({
-    where: {
-      tenantId,
-      source: "WEBEX",
-      status: "ACTIVE",
-    },
+export async function getActiveWebexAllowlist(): Promise<WebexSpaceAllowlistEntry[]> {
+  const policy = await prisma.ingestionPolicy.findUnique({
+    where: { source: "WEBEX" },
     include: { webexAllowlists: true },
   });
 
-  if (!policy) return [];
+  if (!policy || policy.status !== "ACTIVE") return [];
 
   return policy.webexAllowlists.map((a) => ({
     id: a.id,
@@ -67,6 +61,7 @@ export async function getActiveWebexAllowlist(
     spaceTitle: a.spaceTitle ?? undefined,
     purpose: a.purpose,
     technologyLabel: a.technologyLabel ?? undefined,
+    dealLabel: a.dealLabel ?? undefined,
   }));
 }
 
@@ -78,7 +73,6 @@ export function isAllowlistedSpace(
 }
 
 export async function ingestWebexMessage(
-  tenantId: string,
   message: WebexMessage,
   allowlistRef?: string,
   teamMembers?: MentionUser[],
@@ -86,10 +80,11 @@ export async function ingestWebexMessage(
     purpose?: SpacePurpose;
     spaceTitle?: string;
     technologyLabel?: string;
+    dealLabel?: string;
   }
 ): Promise<{ created: boolean; id: string }> {
   const body = message.text ?? "";
-  const members = teamMembers ?? (await getTenantMembers(tenantId));
+  const members = teamMembers ?? (await getAppUserForMentions());
 
   const analysis = analyzeCommunication({
     body,
@@ -100,22 +95,30 @@ export async function ingestWebexMessage(
 
   const existing = await prisma.communication.findUnique({
     where: {
-      tenantId_source_externalId: {
-        tenantId,
+      source_externalId: {
         source: "WEBEX",
         externalId: message.id,
       },
     },
   });
 
+  const purpose = spaceMeta?.purpose ?? "PRIORITIES";
   const spaceMetadata = {
     roomId: message.roomId,
     parentId: message.parentId,
     mentionedUserIds: analysis.mentionedUserIds,
-    spacePurpose: spaceMeta?.purpose ?? "PRIORITIES",
+    spacePurpose: purpose,
     spaceTitle: spaceMeta?.spaceTitle,
     technologyLabel: spaceMeta?.technologyLabel,
+    dealLabel: spaceMeta?.dealLabel,
   };
+  const tags = [...analysis.tags];
+  if (purpose === "DEAL" && !tags.includes("deal-space")) {
+    tags.push("deal-space");
+  }
+  if (purpose === "TECHNOLOGY" && !tags.includes("technology-space")) {
+    tags.push("technology-space");
+  }
 
   if (existing) {
     await prisma.communication.update({
@@ -126,8 +129,11 @@ export async function ingestWebexMessage(
         priorityReasons: analysis.priorityReasons,
         summary: analysis.summary,
         excerpt: analysis.summary,
-        tags: analysis.tags,
-        metadata: spaceMetadata,
+        tags,
+        metadata: mergeCommunicationMetadata(
+          existing.metadata,
+          spaceMetadata
+        ) as Prisma.InputJsonValue,
       },
     });
     return { created: false, id: existing.id };
@@ -135,7 +141,6 @@ export async function ingestWebexMessage(
 
   const communication = await prisma.communication.create({
     data: {
-      tenantId,
       source: "WEBEX",
       externalId: message.id,
       threadId: message.parentId ?? message.roomId,
@@ -148,9 +153,9 @@ export async function ingestWebexMessage(
       priorityScore: analysis.priorityScore,
       priorityReasons: analysis.priorityReasons,
       summary: analysis.summary,
-      tags: analysis.tags,
+      tags,
       allowlistRef,
-      metadata: spaceMetadata,
+      metadata: spaceMetadata as Prisma.InputJsonValue,
     },
   });
 
@@ -160,7 +165,6 @@ export async function ingestWebexMessage(
       for (const userId of mentionedAssignees) {
         await prisma.nextStep.create({
           data: {
-            tenantId,
             communicationId: communication.id,
             title: "Respond — you were @mentioned",
             priority: analysis.priority,
@@ -172,7 +176,6 @@ export async function ingestWebexMessage(
     } else {
       await prisma.nextStep.create({
         data: {
-          tenantId,
           communicationId: communication.id,
           title: analysis.suggestedAction,
           priority: analysis.priority,
@@ -185,23 +188,23 @@ export async function ingestWebexMessage(
   return { created: true, id: communication.id };
 }
 
-export async function syncWebexMessages(tenantId: string): Promise<{
+export async function syncWebexMessages(): Promise<{
   fetched: number;
   ingested: number;
   updated: number;
 }> {
-  const allowlist = await getActiveWebexAllowlist(tenantId);
+  const allowlist = await getActiveWebexAllowlist();
   if (allowlist.length === 0) {
     return { fetched: 0, ingested: 0, updated: 0 };
   }
 
-  const accessToken = await getWebexAccessToken(tenantId);
+  const accessToken = await getWebexAccessToken();
   if (!accessToken) {
     throw new Error("Webex not connected");
   }
 
   const messages = await fetchAllowlistedMessages(accessToken, allowlist);
-  const teamMembers = await getTenantMembers(tenantId);
+  const teamMembers = await getAppUserForMentions();
   const spaceByRoomId = new Map(
     allowlist.map((entry) => [entry.spaceId, entry])
   );
@@ -212,7 +215,6 @@ export async function syncWebexMessages(tenantId: string): Promise<{
     try {
       const entry = spaceByRoomId.get(message.roomId);
       const result = await ingestWebexMessage(
-        tenantId,
         message,
         entry?.id,
         teamMembers,
@@ -221,6 +223,7 @@ export async function syncWebexMessages(tenantId: string): Promise<{
               purpose: entry.purpose ?? "PRIORITIES",
               spaceTitle: entry.spaceTitle,
               technologyLabel: entry.technologyLabel,
+              dealLabel: entry.dealLabel,
             }
           : undefined
       );
@@ -235,13 +238,13 @@ export async function syncWebexMessages(tenantId: string): Promise<{
   return { fetched: messages.length, ingested, updated };
 }
 
-export async function registerWebexWebhooks(tenantId: string): Promise<string[]> {
-  const allowlist = await getActiveWebexAllowlist(tenantId);
+export async function registerWebexWebhooks(): Promise<string[]> {
+  const allowlist = await getActiveWebexAllowlist();
   if (allowlist.length === 0) {
     throw new Error("No active Webex allowlist configured");
   }
 
-  const accessToken = await getWebexAccessToken(tenantId);
+  const accessToken = await getWebexAccessToken();
   if (!accessToken) {
     throw new Error("Webex not connected");
   }
@@ -260,16 +263,14 @@ export async function registerWebexWebhooks(tenantId: string): Promise<string[]>
       accessToken,
       targetUrl,
       entry.spaceId,
-      `next-${tenantId}-${entry.spaceId}`,
+      `next-${entry.spaceId}`,
       secret
     );
     webhookIds.push(webhook.id);
   }
 
   await prisma.integrationToken.update({
-    where: {
-      tenantId_provider: { tenantId, provider: "WEBEX" },
-    },
+    where: { provider: "WEBEX" },
     data: {
       metadata: { webhookIds, targetUrl },
     },

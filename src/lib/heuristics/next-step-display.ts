@@ -5,6 +5,7 @@ export interface NextStepDisplayInput {
   title: string;
   status: string;
   dueAt: Date | null;
+  description?: string | null;
   communication: {
     subject: string | null;
     source: string;
@@ -111,6 +112,19 @@ export function formatNextStepCardDisplay(
   input: NextStepDisplayInput,
   dashboardSummary?: NextStepSummaryDisplay | null
 ): NextStepCardDisplay {
+  const manualSummary = input.description?.trim();
+  if (manualSummary && !input.communication) {
+    return {
+      headline: formatNextStepHeadline(input),
+      meta: formatNextStepMeta(input),
+      summary: {
+        text: manualSummary,
+        label: "Summary",
+        source: "manual",
+      },
+    };
+  }
+
   if (isGenericReviewNextStep(input.title)) {
     const summaryText = resolveReviewSummaryText(input, dashboardSummary);
     if (summaryText) {
@@ -154,6 +168,8 @@ export function formatNextStepMeta(input: NextStepDisplayInput): string {
           : formatRelativeAge(communication.receivedAt)
       );
     }
+  } else if (input.description?.trim()) {
+    parts.push("Manual");
   }
 
   if (input.dueAt) {

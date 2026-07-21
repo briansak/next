@@ -10,17 +10,22 @@ interface CardAiSummaryProps {
   label?: string | null;
   source?: string | null;
   maxBullets?: number;
+  variant?: "full" | "teaser";
+  /** Show every parsed takeaway with no "+N more" truncation. */
+  showAllTakeaways?: boolean;
 }
 
 function GongSummaryContent({
   display,
   maxBullets,
+  hideRemaining = false,
 }: {
   display: GongSummaryDisplay;
   maxBullets: number;
+  hideRemaining?: boolean;
 }) {
   const visible = display.takeaways.slice(0, maxBullets);
-  const remaining = display.takeaways.length - visible.length;
+  const remaining = hideRemaining ? 0 : display.takeaways.length - visible.length;
 
   return (
     <>
@@ -70,20 +75,63 @@ function GongSummaryContent({
   );
 }
 
+function teaserLine(text: string, maxLength = 140): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLength) return oneLine;
+  return `${oneLine.slice(0, maxLength - 1).trim()}…`;
+}
+
+function resolveTeaserText(text: string): string {
+  const normalized = fixMojibake(text.trim());
+  const display = formatGongSummaryForDisplay(normalized);
+  if (display.overview?.trim()) {
+    return teaserLine(display.overview);
+  }
+  if (display.takeaways[0]) {
+    return teaserLine(display.takeaways[0]);
+  }
+  return teaserLine(normalized);
+}
+
 export function CardAiSummary({
   text,
   label,
   source,
   maxBullets = 4,
+  variant = "full",
+  showAllTakeaways = false,
 }: CardAiSummaryProps) {
   const trimmed = text?.trim();
   if (!trimmed) return null;
 
   const normalized = fixMojibake(trimmed);
-  const display = formatGongSummaryForDisplay(normalized);
+
+  if (variant === "teaser") {
+    return (
+      <p
+        className="line-clamp-2"
+        style={{
+          fontSize: "0.85rem",
+          color: "var(--text-muted)",
+          lineHeight: 1.5,
+          marginTop: "0.35rem",
+          marginBottom: 0,
+        }}
+      >
+        {resolveTeaserText(normalized)}
+      </p>
+    );
+  }
+
+  const display = formatGongSummaryForDisplay(normalized, {
+    maxTakeaways: showAllTakeaways ? 24 : 12,
+  });
   const showStructured =
     gongSummaryHasStructuredContent(display) &&
     (display.takeaways.length >= 2 || normalized.length > 220);
+  const visibleBullets = showAllTakeaways
+    ? display.takeaways.length
+    : maxBullets;
 
   return (
     <div style={{ marginTop: "0.35rem" }}>
@@ -101,7 +149,11 @@ export function CardAiSummary({
       ) : null}
       {showStructured ? (
         <div style={{ marginTop: label ? "0.35rem" : 0 }}>
-          <GongSummaryContent display={display} maxBullets={maxBullets} />
+          <GongSummaryContent
+            display={display}
+            maxBullets={visibleBullets}
+            hideRemaining={showAllTakeaways}
+          />
         </div>
       ) : (
         <p
@@ -110,6 +162,7 @@ export function CardAiSummary({
             color: "var(--text-muted)",
             lineHeight: 1.5,
             marginTop: label ? "0.2rem" : 0,
+            whiteSpace: "pre-wrap",
           }}
         >
           {normalized}

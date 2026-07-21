@@ -4,13 +4,7 @@ import { getWebexScopes } from "../src/lib/integrations/webex";
 import { VidcastMcpClient, getVidcastMcpUrl } from "../src/lib/integrations/webex/vidcast-mcp";
 
 async function main() {
-  const tenant = await prisma.tenant.findFirst();
-  if (!tenant) {
-    console.log("No tenant found");
-    return;
-  }
-
-  const token = await getWebexAccessToken(tenant.id);
+  const token = await getWebexAccessToken();
   if (!token) {
     console.log("No Webex token — reconnect Webex in Settings");
     return;
@@ -20,8 +14,8 @@ async function main() {
   console.log("Configured scopes:", scopes);
   console.log("Has spark:mcp:", scopes.includes("spark:mcp"));
 
-  const stored = await prisma.integrationToken.findFirst({
-    where: { tenantId: tenant.id, provider: "WEBEX" },
+  const stored = await prisma.integrationToken.findUnique({
+    where: { provider: "WEBEX" },
     select: { expiresAt: true, updatedAt: true },
   });
   console.log("Token last updated:", stored?.updatedAt?.toISOString() ?? "unknown");

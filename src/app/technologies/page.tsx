@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
@@ -15,6 +14,9 @@ import { viewerIsMentioned } from "@/lib/heuristics/mentions";
 import { CardAiSummary } from "@/components/card-ai-summary";
 import { DashboardCardLink } from "@/components/dashboard-card-link";
 import { formatRelativeAge } from "@/components/dashboard-ui";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageSection, PageShell } from "@/components/ui/page-shell";
+import { Panel } from "@/components/ui/panel";
 import {
   resolveTechnologySpaceFaq,
   type TechnologyThreadMessage,
@@ -23,8 +25,6 @@ import {
   resolveTechnologySpaceSummary,
   type TechnologyMessage,
 } from "@/lib/heuristics/technology-summary";
-import { scopedToTenant } from "@/lib/tenant";
-
 interface CommunicationMetadata {
   mentionedUserIds?: string[];
   roomId?: string;
@@ -62,14 +62,14 @@ export default async function TechnologiesPage() {
     redirect("/login");
   }
 
-  const tenantWhere = scopedToTenant(session.tenantId);
+  const tenantWhere = {};
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
   const announcementSince = new Date(
     Date.now() - ANNOUNCEMENT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
   );
 
   const webexPolicy = await prisma.ingestionPolicy.findFirst({
-    where: { ...tenantWhere, source: "WEBEX" },
+    where: { source: "WEBEX" },
     include: {
       webexAllowlists: {
         where: { purpose: "TECHNOLOGY" },
@@ -83,7 +83,6 @@ export default async function TechnologiesPage() {
   const rawMessages = mappedSpaces.length
     ? await prisma.communication.findMany({
         where: {
-          ...tenantWhere,
           source: "WEBEX",
           receivedAt: { gte: since },
         },
@@ -98,7 +97,6 @@ export default async function TechnologiesPage() {
 
   const announcementRows = await prisma.communication.findMany({
     where: {
-      ...tenantWhere,
       source: "EMAIL",
       receivedAt: { gte: announcementSince },
       tags: { has: "product-announcement" },
@@ -154,10 +152,19 @@ export default async function TechnologiesPage() {
     messagesBySpace.set(roomId, bucket);
   }
 
+  const viewerMention = {
+    id: session.userId,
+    name: session.name ?? null,
+    email: session.email,
+  };
+
   const directedToYou = technologyMessages
     .filter((message) => {
       const meta = (message.metadata ?? {}) as CommunicationMetadata;
-      return viewerIsMentioned(meta.mentionedUserIds, session.userId);
+      return viewerIsMentioned(meta.mentionedUserIds, session.userId, {
+        text: message.body,
+        viewer: viewerMention,
+      });
     })
     .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())
     .slice(0, 12);
@@ -217,17 +224,13 @@ export default async function TechnologiesPage() {
   }
 
   return (
-    <main style={{ maxWidth: 1100, margin: "0 auto", padding: "2rem 1.5rem" }}>
-      <header style={{ marginBottom: "2rem" }}>
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 600 }}>Technologies</h1>
-        <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", marginTop: "0.25rem" }}>
-          Product release emails plus compressed summaries and thread-based FAQs from
-          product, support, and GTM spaces — catch up quickly without reading every message.
-        </p>
-      </header>
-
+    <PageShell
+      title="Technology Updates"
+      description="Product release emails plus compressed summaries and thread-based FAQs from product, support, and GTM spaces — catch up quickly without reading every message."
+      width="wide"
+    >
       {productAnnouncements.length > 0 && (
-        <section style={{ marginBottom: "1.5rem" }}>
+        <PageSection>
           <Panel title="Product announcements" count={productAnnouncements.length}>
             <p
               style={{
@@ -337,31 +340,22 @@ export default async function TechnologiesPage() {
               </div>
             ))}
           </Panel>
-        </section>
+        </PageSection>
       )}
 
       {mappedSpaces.length === 0 && productAnnouncements.length === 0 ? (
-        <section
-          style={{
-            background: "var(--surface)",
-            border: "1px solid var(--border)",
-            borderRadius: 12,
-            padding: "1.5rem",
-          }}
-        >
-          <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", lineHeight: 1.6 }}>
-            No technology content yet. Product announcement emails are detected automatically
-            from your connected mailbox. For Webex space summaries, map technology spaces in{" "}
-            <Link href="/settings/ingestion" style={{ color: "var(--accent)" }}>
-              ingestion settings
-            </Link>
-            .
-          </p>
-        </section>
+        <PageSection>
+          <div className="panel">
+            <EmptyState message="No technology content yet. Product announcement emails are detected automatically from your connected mailbox. For Webex space summaries, map technology spaces in ingestion settings." />
+            <p className="text-sm" style={{ marginTop: "0.75rem" }}>
+              <Link href="/settings/webex">Open ingestion settings</Link>
+            </p>
+          </div>
+        </PageSection>
       ) : mappedSpaces.length === 0 ? null : (
         <>
           {directedToYou.length > 0 && (
-            <section style={{ marginBottom: "1.5rem" }}>
+            <PageSection>
               <Panel title="Directed to you" count={directedToYou.length}>
                 <p
                   style={{
@@ -442,11 +436,11 @@ export default async function TechnologiesPage() {
                   })}
                 </ul>
               </Panel>
-            </section>
+            </PageSection>
           )}
 
           {[...groupedByLabel.entries()].map(([label, entries]) => (
-            <section key={label} style={{ marginBottom: "1.5rem" }}>
+            <PageSection key={label}>
               <Panel title={label} count={entries.length}>
                 <ul
                   style={{
@@ -486,7 +480,7 @@ export default async function TechnologiesPage() {
 
                       <CardAiSummary
                         text={summary.text}
-                        label={summary.source === "ollama" ? "AI summary" : "Discussion summary"}
+                        label="Discussion summary"
                       />
 
                       <div style={{ marginTop: "1rem" }}>
@@ -666,40 +660,11 @@ export default async function TechnologiesPage() {
                   ))}
                 </ul>
               </Panel>
-            </section>
+            </PageSection>
           ))}
         </>
       )}
-    </main>
-  );
-}
-
-function Panel({
-  title,
-  count,
-  children,
-}: {
-  title: string;
-  count: number;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: 12,
-        padding: "1.25rem",
-      }}
-    >
-      <h2 style={{ fontSize: "0.875rem", fontWeight: 600, marginBottom: "1rem" }}>
-        {title}
-        <span style={{ color: "var(--text-muted)", fontWeight: 400, marginLeft: "0.5rem" }}>
-          ({count})
-        </span>
-      </h2>
-      {children}
-    </section>
+    </PageShell>
   );
 }
 

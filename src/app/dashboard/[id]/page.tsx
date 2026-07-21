@@ -13,20 +13,36 @@ import { EventPlanningTodos } from "@/components/event-planning-todos";
 import { MeetingParticipants } from "@/components/meeting-participants";
 import { prisma } from "@/lib/db";
 import { formatCommunicationBody } from "@/lib/communications/format-body";
+import { applyViewerPriorityOverride } from "@/lib/communications/viewer-override";
+import { isTechnologyCommunication, isDealCommunication } from "@/lib/communications/space-purpose";
 import {
-  applyViewerPriorityOverride,
-} from "@/lib/communications/viewer-override";
-import { isTechnologyCommunication } from "@/lib/communications/space-purpose";
-import {
+  internalCallReplayUrl,
   isInternalCallCommunication,
+  type InternalCallMetadata,
 } from "@/lib/communications/internal-call";
 import {
   resolveDashboardSummary,
   type DashboardSummaryItem,
 } from "@/lib/heuristics/dashboard-summary";
 import { suggestEventPrepTodos } from "@/lib/heuristics/event-prep-suggestions";
-import { meetingVisibleToUser } from "@/lib/integrations/webex/meetings";
-import { scopedToTenant } from "@/lib/tenant";
+import {
+  meetingRecordingHref,
+  meetingVisibleToUser,
+} from "@/lib/integrations/webex/meetings";
+import { MeetingRecordingLinks } from "@/components/meeting-recording-links";
+import { MeetingHighlights } from "@/components/meeting-highlights";
+import { MeetingSourceBadges } from "@/components/meeting-source-badges";
+import {
+  meetingSourceBadges,
+  resolveUnifiedMeetingSummary,
+  type UnifiedMeetingMetadata,
+} from "@/lib/integrations/meetings/unify";
+import {
+  getUserOllamaRuntime,
+  getUserPreferences,
+  loadDashboardHiddenCommunicationIds,
+  resolveAllowOllamaForUi,
+} from "@/lib/user/preferences";
 import { PriorityControls } from "@/components/priority-controls";
 
 interface EmailMetadata {
@@ -45,24 +61,24 @@ interface CalendarMetadata {
   isRecurring?: boolean;
 }
 
-interface MeetingMetadata {
+interface MeetingMetadata extends UnifiedMeetingMetadata {
   inviteeEmails?: string[];
   invitees?: Array<{ email?: string; displayName?: string; response?: string }>;
   participantEmails?: string[];
   participants?: Array<{ email?: string; displayName?: string; response?: string }>;
-  summaryText?: string;
-  gongSummaryText?: string;
-  summaryActionItems?: string[];
-  gongActionItems?: string[];
-  actionItems?: Array<{ title: string }>;
-  transcriptText?: string;
-  recordingDownloadUrl?: string;
   transcriptDownloadUrl?: string;
+  recordingId?: string;
   webLink?: string;
   hostEmail?: string;
   hostDisplayName?: string;
   hasRecording?: boolean;
   hasSummary?: boolean;
+  callHighlights?: Array<{
+    timestamp: string;
+    startSeconds: number;
+    title: string;
+    description: string;
+  }>;
 }
 
 export default async function CommunicationDetailPage({
@@ -79,8 +95,7 @@ export default async function CommunicationDetailPage({
   const communication = await prisma.communication.findFirst({
     where: {
       id,
-      ...scopedToTenant(session.tenantId),
-    },
+      },
     include: {
       nextSteps: {
         where: { status: { in: ["OPEN", "IN_PROGRESS"] } },
@@ -93,8 +108,10 @@ export default async function CommunicationDetailPage({
     notFound();
   }
 
-  const isAdmin = session.role === "ADMIN";
+  const isAdmin = true;
   const userEmail = session.email.toLowerCase();
+  const hiddenCommunicationIds = await loadDashboardHiddenCommunicationIds(session.userId
+  );
   const meta = (communication.metadata ?? {}) as Record<string, unknown>;
   const now = new Date();
 
@@ -107,7 +124,6 @@ export default async function CommunicationDetailPage({
 
   const summaryItem: DashboardSummaryItem = {
     id: communication.id,
-    tenantId: communication.tenantId,
     source: communication.source,
     subject: communication.subject,
     body: communication.body,
@@ -117,21 +133,28 @@ export default async function CommunicationDetailPage({
     metadata: communication.metadata,
   };
 
-  const aiSummary = await resolveDashboardSummary(summaryItem);
+  const ollamaRuntime = await getUserOllamaRuntime(session.userId);
+  const aiSummary = await resolveDashboardSummary(summaryItem, {
+    allowOllama: resolveAllowOllamaForUi(
+      await getUserPreferences(session.userId)
+    ),
+    ollamaRuntime,
+  });
   const meetingMeta = meta as MeetingMetadata;
+  const unifiedSummary = resolveUnifiedMeetingSummary(
+    meetingMeta,
+    communication.summary
+  );
   const summaryText =
+    unifiedSummary?.text?.trim() ||
     aiSummary.text?.trim() ||
-    meetingMeta.gongSummaryText?.trim() ||
-    meetingMeta.summaryText?.trim() ||
     null;
-  const summarySource =
-    aiSummary.source === "gong" || meetingMeta.gongSummaryText?.trim()
-      ? "gong"
-      : aiSummary.source;
-  const summaryLabel =
-    summarySource === "gong"
-      ? "Gong AI"
-      : aiSummary.label;
+  const summarySource = unifiedSummary?.source ?? aiSummary.source;
+  const summaryLabel = unifiedSummary?.label ?? aiSummary.label;
+  const meetingBadges =
+    communication.source === "WEBEX_MEETING"
+      ? meetingSourceBadges(meetingMeta)
+      : [];
   const formattedBody = formatCommunicationBody(communication.body);
   const emailMeta = meta as EmailMetadata;
   const calendarMeta = meta as CalendarMetadata;
@@ -139,7 +162,8 @@ export default async function CommunicationDetailPage({
     communication.priorityScore,
     communication.priority,
     communication.metadata,
-    session.userId
+    session.userId,
+    { communicationId: communication.id, hiddenCommunicationIds }
   );
   const displayPriority = baseOverride.priority;
   const displayOverridden = baseOverride.overridden;
@@ -166,21 +190,23 @@ export default async function CommunicationDetailPage({
     [];
 
   const fromTechnologies = isTechnologyCommunication(communication.metadata);
+  const fromDealSpace = isDealCommunication(communication.metadata);
   const fromInternalCalls = isInternalCallCommunication(
     communication.source,
     communication.subject,
     communication.tags,
     communication.metadata
   );
+  const internalCallMeta = meta as InternalCallMetadata;
   const backHref = fromTechnologies
     ? "/technologies"
     : fromInternalCalls
       ? "/internal-calls"
       : "/dashboard";
   const backLabel = fromTechnologies
-    ? "Technologies"
+    ? "Technology Updates"
     : fromInternalCalls
-      ? "Internal Calls"
+      ? "Meeting Summaries"
       : "My Priorities";
 
   return (
@@ -208,7 +234,10 @@ export default async function CommunicationDetailPage({
             marginBottom: "0.5rem",
           }}
         >
-          {!fromTechnologies && <PriorityBadge priority={displayPriority} />}
+          {!fromTechnologies && !fromDealSpace && <PriorityBadge priority={displayPriority} />}
+          {meetingBadges.length > 0 ? (
+            <MeetingSourceBadges badges={meetingBadges} />
+          ) : null}
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
             {sourceLabel(communication.source)}
           </span>
@@ -324,6 +353,23 @@ export default async function CommunicationDetailPage({
           </section>
         )}
 
+      {(fromInternalCalls || communication.source === "WEBEX_MEETING") &&
+        (internalCallMeta.callHighlights?.length ?? meetingMeta.callHighlights?.length ?? 0) >
+          0 && (
+        <MeetingHighlights
+          highlights={
+            internalCallMeta.callHighlights ??
+            meetingMeta.callHighlights ??
+            []
+          }
+          recordingHref={
+            fromInternalCalls
+              ? internalCallReplayUrl(internalCallMeta)
+              : meetingRecordingHref(meetingMeta)
+          }
+        />
+      )}
+
       {communication.source === "WEBEX_MEETING" &&
         meetingActionItems.length > 0 &&
         !meetingMeta.gongSummaryText && (
@@ -392,6 +438,8 @@ export default async function CommunicationDetailPage({
         >
           {communication.source === "WEBEX_MEETING" && meetingMeta.transcriptText
             ? meetingMeta.transcriptText
+            : communication.source === "EMAIL" && internalCallMeta.transcriptText
+              ? internalCallMeta.transcriptText
             : formattedBody || communication.excerpt || "(No content available)"}
         </pre>
       </section>
@@ -508,20 +556,11 @@ export default async function CommunicationDetailPage({
         </section>
       )}
 
-      {(meetingMeta.recordingDownloadUrl ||
+      {(meetingRecordingHref(meetingMeta) ||
         meetingMeta.transcriptDownloadUrl ||
         meetingMeta.webLink) && (
         <section style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-          {meetingMeta.recordingDownloadUrl && (
-            <a
-              href={meetingMeta.recordingDownloadUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ fontSize: "0.875rem", color: "var(--accent)" }}
-            >
-              Open recording
-            </a>
-          )}
+          <MeetingRecordingLinks metadata={meetingMeta} />
           {meetingMeta.transcriptDownloadUrl && (
             <a
               href={meetingMeta.transcriptDownloadUrl}
@@ -530,16 +569,6 @@ export default async function CommunicationDetailPage({
               style={{ fontSize: "0.875rem", color: "var(--accent)" }}
             >
               Download transcript
-            </a>
-          )}
-          {meetingMeta.webLink && (
-            <a
-              href={meetingMeta.webLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ fontSize: "0.875rem", color: "var(--accent)" }}
-            >
-              Open in Webex
             </a>
           )}
         </section>

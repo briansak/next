@@ -20,6 +20,8 @@ interface NextStepsPanelProps {
 
 const DRAG_DATA_KEY = "application/x-next-step-id";
 
+const actionButtonClass = "btn btn--ghost";
+
 export function NextStepsPanel({ steps: initialSteps }: NextStepsPanelProps) {
   const [steps, setSteps] = useState(initialSteps);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -31,6 +33,30 @@ export function NextStepsPanel({ steps: initialSteps }: NextStepsPanelProps) {
   useEffect(() => {
     setSteps(initialSteps);
   }, [initialSteps]);
+
+  async function updateStepStatus(
+    stepId: string,
+    status: "IN_PROGRESS" | "DONE" | "DISMISSED"
+  ) {
+    setSaveError(null);
+    try {
+      const res = await fetch(`/api/next-steps/${stepId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setSaveError(data.error ?? "Could not update step");
+        return;
+      }
+      if (status === "DONE" || status === "DISMISSED") {
+        setSteps((current) => current.filter((step) => step.id !== stepId));
+      }
+    } catch {
+      setSaveError("Could not update step");
+    }
+  }
 
   async function persistOrder(orderedIds: string[]) {
     setSaving(true);
@@ -133,7 +159,7 @@ export function NextStepsPanel({ steps: initialSteps }: NextStepsPanelProps) {
                     text={step.summaryText}
                     label={step.summaryLabel}
                     source={step.summarySource}
-                    maxBullets={4}
+                    variant="teaser"
                   />
                 </>
               ) : (
@@ -144,6 +170,37 @@ export function NextStepsPanel({ steps: initialSteps }: NextStepsPanelProps) {
               <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
                 {step.meta}
               </span>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.5rem",
+                  marginTop: "0.5rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void updateStepStatus(step.id, "IN_PROGRESS");
+                  }}
+                  className={actionButtonClass}
+                >
+                  In progress
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void updateStepStatus(step.id, "DONE");
+                  }}
+                  className={actionButtonClass}
+                >
+                  Done
+                </button>
+              </div>
             </>
           );
 
@@ -256,17 +313,6 @@ export function NextStepsPanel({ steps: initialSteps }: NextStepsPanelProps) {
                     }}
                   >
                     {cardBody}
-                    <span
-                      style={{
-                        display: "inline-block",
-                        marginTop: "0.35rem",
-                        fontSize: "0.72rem",
-                        color: "var(--accent)",
-                        fontWeight: 500,
-                      }}
-                    >
-                      View source →
-                    </span>
                   </Link>
                 ) : (
                   cardBody

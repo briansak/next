@@ -4,8 +4,10 @@ import {
   buildMeetingBody,
   collectEmails,
   meetingVisibleToUser,
+  recordingMatchesMeeting,
+  meetingRecordingHref,
 } from "./meetings";
-import type { WebexMeeting, MeetingEnrichment } from "./meetings";
+import type { WebexMeeting, MeetingEnrichment, WebexRecording } from "./meetings";
 
 describe("meeting helpers", () => {
   it("detects tenant members relevant to a meeting", () => {
@@ -71,5 +73,37 @@ describe("meeting helpers", () => {
     expect(meetingVisibleToUser(meta, "brsak@cisco.com", false)).toBe(true);
     expect(meetingVisibleToUser(meta, "admin@example.com", false)).toBe(false);
     expect(meetingVisibleToUser(meta, "admin@example.com", true)).toBe(true);
+  });
+
+  it("matches recordings by instance or series id", () => {
+    const meeting: WebexMeeting = {
+      id: "abc123_I_456789",
+      title: "Sync",
+      meetingType: "meeting",
+      start: "2026-07-14T15:00:00Z",
+      meetingSeriesId: "abc123",
+    };
+    const recording: WebexRecording = {
+      id: "rec1",
+      meetingSeriesId: "abc123",
+    };
+    expect(recordingMatchesMeeting(recording, meeting)).toBe(true);
+  });
+
+  it("prefers direct recording url then falls back to webex meeting link", () => {
+    expect(
+      meetingRecordingHref({
+        recordingDownloadUrl: "https://example.com/rec.mp4",
+        webLink: "https://webex.example.com/meet/1",
+        hasRecording: true,
+      })
+    ).toBe("https://example.com/rec.mp4");
+
+    expect(
+      meetingRecordingHref({
+        webLink: "https://webex.example.com/meet/1",
+        hasRecording: true,
+      })
+    ).toBe("https://webex.example.com/meet/1");
   });
 });

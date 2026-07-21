@@ -25,6 +25,8 @@ describe("analyzeCalendarEvent", () => {
       attendeeEmails: ["jane@wwt.com", "brsak@cisco.com", "bob@wwt.com"],
       organizerEmail: "jane@wwt.com",
       isRecurring: false,
+      partnerDomains: ["wwt.com"],
+      partnerSubjectPrefixes: ["[WWT]"],
     });
 
     expect(result.needsPlanning).toBe(true);
@@ -97,7 +99,8 @@ describe("isRoutineCalendarTitle", () => {
 
 describe("daysUntilEvent", () => {
   it("counts whole days until start", () => {
-    const start = daysFromNow(5);
-    expect(daysUntilEvent(start)).toBe(5);
+    const now = new Date("2026-07-20T10:00:00");
+    const start = new Date("2026-07-25T14:00:00");
+    expect(daysUntilEvent(start, now)).toBe(5);
   });
 });
